@@ -1,0 +1,38 @@
+name: pig_mobile
+description: "PIG Mobile - Playlist Intelligent Generator for Android & iOS"
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.11.5
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  # Audio playback
+  just_audio: ^0.9.43
+  # SQLite database
+  sqflite: ^2.4.2
+  path: ^1.9.1
+  path_provider: ^2.1.5
+  # State management
+  provider: ^6.1.4
+  # Permissions
+  permission_handler: ^11.4.0
+  # Keep screen on
+  wakelock_plus: ^1.2.8
+  # Pure Dart ID3/metadata tag reader
+  audio_metadata_reader: ^1.6.0
+  # Media session for Bluetooth/Android Auto/CarPlay/lock screen
+  audio_service: ^0.18.17
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/
