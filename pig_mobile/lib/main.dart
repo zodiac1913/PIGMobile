@@ -56,21 +56,34 @@ class _MainShellState extends State<MainShell> {
           : AppBar(
               leading: Padding(
                 padding: const EdgeInsets.all(8),
-                child: Image.asset('assets/pigIconsnout.png',
-                    errorBuilder: (_, e, s) =>
-                        const Icon(Icons.music_note, color: PigTheme.hotPink)),
+                child: Image.asset(
+                  'assets/pigIconsnout.png',
+                  errorBuilder: (_, e, s) =>
+                      const Icon(Icons.music_note, color: PigTheme.hotPink),
+                ),
               ),
-              title: const Text('PIG',
-                  style: TextStyle(
-                      color: PigTheme.hotPink, fontWeight: FontWeight.bold)),
+              title: const Text(
+                'PIG',
+                style: TextStyle(
+                  color: PigTheme.hotPink,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
             ),
       body: Column(
         children: [
-          Expanded(child: _buildBody()),
-          if (_currentTab != 0)
-            MiniPlayer(
-              onTap: () => setState(() => _currentTab = 0),
+          Expanded(
+            child: IndexedStack(
+              index: _currentTab,
+              children: const [
+                PlayerScreen(asTab: true),
+                BrowseScreen(),
+                SettingsScreen(),
+              ],
             ),
+          ),
+          if (_currentTab != 0)
+            MiniPlayer(onTap: () => setState(() => _currentTab = 0)),
         ],
       ),
       bottomNavigationBar: BottomNavigationBar(
@@ -80,24 +93,13 @@ class _MainShellState extends State<MainShell> {
         selectedFontSize: 11,
         unselectedFontSize: 10,
         items: _tabs
-            .map((t) =>
-                BottomNavigationBarItem(icon: Icon(t.icon), label: t.label))
+            .map(
+              (t) =>
+                  BottomNavigationBarItem(icon: Icon(t.icon), label: t.label),
+            )
             .toList(),
       ),
     );
-  }
-
-  Widget _buildBody() {
-    switch (_currentTab) {
-      case 0:
-        return const PlayerScreen(asTab: true);
-      case 1:
-        return const BrowseScreen();
-      case 2:
-        return const SettingsScreen();
-      default:
-        return const PlayerScreen(asTab: true);
-    }
   }
 }
 

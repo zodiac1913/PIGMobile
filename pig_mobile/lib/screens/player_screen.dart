@@ -33,21 +33,23 @@ class _PlayerScreenState extends State<PlayerScreen> {
   /// If user hits play with nothing queued, play entire library shuffled.
   Future<void> _handlePlay() async {
     final audio = context.read<AudioService>();
+    // If something is playing, toggle pause/play
     if (audio.currentSong != null) {
       audio.toggle();
       return;
     }
-    // Nothing ever selected — play everything shuffled
-    if (audio.playlist.isEmpty) {
-      final db = DatabaseService();
-      final allSongs = await db.getAllSongs();
-      if (allSongs.isEmpty || !mounted) return;
-      if (!audio.shuffle) audio.toggleShuffle();
-      if (audio.repeatMode == PigRepeatMode.off) audio.toggleRepeat();
-      audio.setPlaylist(allSongs, startIndex: 0);
-    } else {
-      audio.toggle();
+    // If playlist has songs (set from Browse), start playing
+    if (audio.playlist.isNotEmpty) {
+      audio.toggle(); // This will play index 0
+      return;
     }
+    // Nothing ever selected — play everything shuffled
+    final db = DatabaseService();
+    final allSongs = await db.getAllSongs();
+    if (allSongs.isEmpty || !mounted) return;
+    if (!audio.shuffle) audio.toggleShuffle();
+    if (audio.repeatMode == PigRepeatMode.off) audio.toggleRepeat();
+    audio.setPlaylist(allSongs, startIndex: 0);
   }
 
   void _showSongInfoModal(BuildContext context, AudioService audio) {
@@ -80,8 +82,11 @@ class _PlayerScreenState extends State<PlayerScreen> {
                       alignment: Alignment.topRight,
                       child: GestureDetector(
                         onTap: () => Navigator.pop(ctx),
-                        child: const Icon(Icons.close,
-                            color: Colors.grey, size: 22),
+                        child: const Icon(
+                          Icons.close,
+                          color: Colors.grey,
+                          size: 22,
+                        ),
                       ),
                     ),
                     // Album art
@@ -99,12 +104,15 @@ class _PlayerScreenState extends State<PlayerScreen> {
                       ),
                     const SizedBox(height: 12),
                     // Song info — only show fields with data
-                    Text(song.displayTitle,
-                        style: const TextStyle(
-                            color: PigTheme.hotPink,
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold),
-                        textAlign: TextAlign.center),
+                    Text(
+                      song.displayTitle,
+                      style: const TextStyle(
+                        color: PigTheme.hotPink,
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
                     if (song.artist != null && song.artist!.isNotEmpty)
                       _infoLine('Artist', song.artist!),
                     if (song.album != null && song.album!.isNotEmpty)
@@ -117,7 +125,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
                       _infoLine('Folder', song.sourceFolder!),
                     if (audio.currentPlaylists.isNotEmpty)
                       _infoLine(
-                          'Gen Playlists', audio.currentPlaylists.join(', ')),
+                        'Gen Playlists',
+                        audio.currentPlaylists.join(', '),
+                      ),
                     if (song.durationMs != null)
                       _infoLine('Duration', song.durationFormatted),
                   ],
@@ -136,13 +146,17 @@ class _PlayerScreenState extends State<PlayerScreen> {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text('$label: ',
-              style: const TextStyle(color: PigTheme.cyan, fontSize: 13)),
+          Text(
+            '$label: ',
+            style: const TextStyle(color: PigTheme.cyan, fontSize: 13),
+          ),
           Flexible(
-            child: Text(value,
-                style: const TextStyle(color: PigTheme.hotPink, fontSize: 13),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis),
+            child: Text(
+              value,
+              style: const TextStyle(color: PigTheme.hotPink, fontSize: 13),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
           ),
         ],
       ),
@@ -161,9 +175,11 @@ class _PlayerScreenState extends State<PlayerScreen> {
             Positioned.fill(
               child: Opacity(
                 opacity: 0.10,
-                child: Image.asset('assets/PIGTranBG.png',
-                    fit: BoxFit.contain,
-                    errorBuilder: (_, e, s) => const SizedBox.shrink()),
+                child: Image.asset(
+                  'assets/PIGTranBG.png',
+                  fit: BoxFit.contain,
+                  errorBuilder: (_, e, s) => const SizedBox.shrink(),
+                ),
               ),
             ),
             SafeArea(
@@ -181,40 +197,49 @@ class _PlayerScreenState extends State<PlayerScreen> {
                             onTap: song != null
                                 ? () => _showSongInfoModal(context, audio)
                                 : null,
-                            child:
-                                _AlbumArt(albumArt: audio.currentAlbumArt),
+                            child: _AlbumArt(albumArt: audio.currentAlbumArt),
                           ),
                           const SizedBox(height: 12),
                           // Song title + artist (tap for modal)
                           if (song != null)
                             GestureDetector(
-                              onTap: () =>
-                                  _showSongInfoModal(context, audio),
+                              onTap: () => _showSongInfoModal(context, audio),
                               child: Column(
                                 children: [
-                                  Text(song.displayTitle,
-                                      style: const TextStyle(
-                                          color: PigTheme.hotPink,
-                                          fontSize: 18,
-                                          fontWeight: FontWeight.bold),
-                                      textAlign: TextAlign.center,
-                                      maxLines: 2,
-                                      overflow: TextOverflow.ellipsis),
+                                  Text(
+                                    song.displayTitle,
+                                    style: const TextStyle(
+                                      color: PigTheme.hotPink,
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                    textAlign: TextAlign.center,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
                                   if (song.artist != null &&
                                       song.artist!.isNotEmpty)
-                                    Text(song.artist!,
-                                        style: const TextStyle(
-                                            color: Colors.grey, fontSize: 14),
-                                        textAlign: TextAlign.center),
+                                    Text(
+                                      song.artist!,
+                                      style: const TextStyle(
+                                        color: Colors.grey,
+                                        fontSize: 14,
+                                      ),
+                                      textAlign: TextAlign.center,
+                                    ),
                                 ],
                               ),
                             )
                           else
                             const Padding(
                               padding: EdgeInsets.symmetric(vertical: 20),
-                              child: Text('Tap Play to start',
-                                  style: TextStyle(
-                                      color: Colors.grey, fontSize: 15)),
+                              child: Text(
+                                'Tap Play to start',
+                                style: TextStyle(
+                                  color: Colors.grey,
+                                  fontSize: 15,
+                                ),
+                              ),
                             ),
                           const SizedBox(height: 12),
                           // Seek bar
@@ -256,8 +281,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
     return Scaffold(
       backgroundColor: PigTheme.darkNavy,
       appBar: AppBar(
-          title: const Text('Now Playing'),
-          backgroundColor: PigTheme.navy),
+        title: const Text('Now Playing'),
+        backgroundColor: PigTheme.navy,
+      ),
       body: content,
     );
   }
@@ -281,19 +307,23 @@ class _AlbumArt extends StatelessWidget {
       child: ClipRRect(
         borderRadius: BorderRadius.circular(14),
         child: albumArt != null && albumArt!.isNotEmpty
-            ? Image.memory(Uint8List.fromList(albumArt!),
+            ? Image.memory(
+                Uint8List.fromList(albumArt!),
                 fit: BoxFit.cover,
-                errorBuilder: (_, e, s) => _fallback())
+                errorBuilder: (_, e, s) => _fallback(),
+              )
             : _fallback(),
       ),
     );
   }
 
   Widget _fallback() {
-    return Image.asset('assets/pigicon.png',
-        fit: BoxFit.contain,
-        errorBuilder: (_, e, s) =>
-            const Icon(Icons.music_note, size: 60, color: PigTheme.hotPink));
+    return Image.asset(
+      'assets/pigicon.png',
+      fit: BoxFit.contain,
+      errorBuilder: (_, e, s) =>
+          const Icon(Icons.music_note, size: 60, color: PigTheme.hotPink),
+    );
   }
 }
 
@@ -310,9 +340,11 @@ class _UpcomingList extends StatelessWidget {
 
     // Get next 3 songs after current
     final upcoming = <int>[];
-    for (int i = audio.currentIndex + 1;
-        i < audio.playlist.length && upcoming.length < 3;
-        i++) {
+    for (
+      int i = audio.currentIndex + 1;
+      i < audio.playlist.length && upcoming.length < 3;
+      i++
+    ) {
       upcoming.add(i);
     }
 
@@ -330,8 +362,10 @@ class _UpcomingList extends StatelessWidget {
         children: [
           const Padding(
             padding: EdgeInsets.symmetric(horizontal: 12, vertical: 2),
-            child: Text('Up Next',
-                style: TextStyle(color: Colors.grey, fontSize: 11)),
+            child: Text(
+              'Up Next',
+              style: TextStyle(color: Colors.grey, fontSize: 11),
+            ),
           ),
           ...upcoming.map((idx) {
             final song = audio.playlist[idx];
@@ -343,8 +377,7 @@ class _UpcomingList extends StatelessWidget {
                   Expanded(
                     child: Text(
                       '${song.displayArtist} - ${song.displayTitle}',
-                      style:
-                          const TextStyle(color: Colors.white, fontSize: 12),
+                      style: const TextStyle(color: Colors.white, fontSize: 12),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -357,7 +390,9 @@ class _UpcomingList extends StatelessWidget {
                     onPressed: () => audio.removeFromPlaylist(idx),
                     padding: EdgeInsets.zero,
                     constraints: const BoxConstraints(
-                        minWidth: 32, minHeight: 32),
+                      minWidth: 32,
+                      minHeight: 32,
+                    ),
                   ),
                 ],
               ),
@@ -386,8 +421,7 @@ class _SeekBar extends StatelessWidget {
             SliderTheme(
               data: SliderTheme.of(context).copyWith(
                 trackHeight: 4,
-                thumbShape:
-                    const RoundSliderThumbShape(enabledThumbRadius: 7),
+                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
               ),
               child: Slider(
                 value: maxVal > 0
@@ -403,12 +437,14 @@ class _SeekBar extends StatelessWidget {
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text(_fmt(pos),
-                      style:
-                          const TextStyle(color: Colors.grey, fontSize: 11)),
-                  Text(_fmt(dur),
-                      style:
-                          const TextStyle(color: Colors.grey, fontSize: 11)),
+                  Text(
+                    _fmt(pos),
+                    style: const TextStyle(color: Colors.grey, fontSize: 11),
+                  ),
+                  Text(
+                    _fmt(dur),
+                    style: const TextStyle(color: Colors.grey, fontSize: 11),
+                  ),
                 ],
               ),
             ),
@@ -445,19 +481,32 @@ class _TransportRow extends StatelessWidget {
           return Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              _btn(Icons.skip_previous_rounded, 26, Colors.white,
-                  () => audio.prev()),
               _btn(
-                  playing
-                      ? Icons.pause_circle_filled_rounded
-                      : Icons.play_circle_filled_rounded,
-                  46,
-                  PigTheme.hotPink,
-                  onPlay),
-              _btn(Icons.stop_circle_rounded, 30, Colors.white,
-                  () => audio.stop()),
-              _btn(Icons.skip_next_rounded, 26, Colors.white,
-                  () => audio.next()),
+                Icons.skip_previous_rounded,
+                26,
+                Colors.white,
+                () => audio.prev(),
+              ),
+              _btn(
+                playing
+                    ? Icons.pause_circle_filled_rounded
+                    : Icons.play_circle_filled_rounded,
+                46,
+                PigTheme.hotPink,
+                onPlay,
+              ),
+              _btn(
+                Icons.stop_circle_rounded,
+                30,
+                Colors.white,
+                () => audio.stop(),
+              ),
+              _btn(
+                Icons.skip_next_rounded,
+                26,
+                Colors.white,
+                () => audio.next(),
+              ),
             ],
           );
         },
@@ -465,8 +514,7 @@ class _TransportRow extends StatelessWidget {
     );
   }
 
-  Widget _btn(
-      IconData icon, double size, Color color, VoidCallback onPressed) {
+  Widget _btn(IconData icon, double size, Color color, VoidCallback onPressed) {
     return IconButton(
       icon: Icon(icon, size: size),
       color: color,
@@ -481,42 +529,58 @@ class _ControlsRow extends StatelessWidget {
   final AudioService audio;
   final bool keepScreenOn;
   final VoidCallback onToggleKeepScreenOn;
-  const _ControlsRow(
-      {required this.audio,
-      required this.keepScreenOn,
-      required this.onToggleKeepScreenOn});
+  const _ControlsRow({
+    required this.audio,
+    required this.keepScreenOn,
+    required this.onToggleKeepScreenOn,
+  });
 
   @override
   Widget build(BuildContext context) {
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        _tog(Icons.shuffle_rounded, audio.shuffle, PigTheme.hotPink,
-            () => audio.toggleShuffle()),
+        _tog(
+          Icons.shuffle_rounded,
+          audio.shuffle,
+          PigTheme.hotPink,
+          () => audio.toggleShuffle(),
+        ),
         const SizedBox(width: 20),
         _tog(
-            audio.repeatMode == PigRepeatMode.one
-                ? Icons.repeat_one_rounded
-                : Icons.repeat_rounded,
-            audio.repeatMode != PigRepeatMode.off,
-            audio.repeatMode == PigRepeatMode.one
-                ? PigTheme.goldenrod
-                : PigTheme.hotPink,
-            () => audio.toggleRepeat()),
+          audio.repeatMode == PigRepeatMode.one
+              ? Icons.repeat_one_rounded
+              : Icons.repeat_rounded,
+          audio.repeatMode != PigRepeatMode.off,
+          audio.repeatMode == PigRepeatMode.one
+              ? PigTheme.goldenrod
+              : PigTheme.hotPink,
+          () => audio.toggleRepeat(),
+        ),
         const SizedBox(width: 20),
-        _tog(Icons.light_mode_rounded, keepScreenOn, PigTheme.goldenrod,
-            onToggleKeepScreenOn),
+        _tog(
+          Icons.light_mode_rounded,
+          keepScreenOn,
+          PigTheme.goldenrod,
+          onToggleKeepScreenOn,
+        ),
       ],
     );
   }
 
   Widget _tog(
-      IconData icon, bool active, Color activeColor, VoidCallback onPressed) {
+    IconData icon,
+    bool active,
+    Color activeColor,
+    VoidCallback onPressed,
+  ) {
     return Container(
       decoration: BoxDecoration(
         shape: BoxShape.circle,
         border: Border.all(
-            color: active ? activeColor : Colors.grey.shade700, width: 2),
+          color: active ? activeColor : Colors.grey.shade700,
+          width: 2,
+        ),
         color: active ? activeColor.withAlpha(30) : Colors.transparent,
       ),
       child: IconButton(
@@ -539,8 +603,11 @@ class _VolumeSlider extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        Icon(volume == 0 ? Icons.volume_off : Icons.volume_down,
-            color: Colors.grey, size: 18),
+        Icon(
+          volume == 0 ? Icons.volume_off : Icons.volume_down,
+          color: Colors.grey,
+          size: 18,
+        ),
         Expanded(
           child: SliderTheme(
             data: SliderTheme.of(context).copyWith(

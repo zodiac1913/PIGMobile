@@ -250,12 +250,27 @@ class PigAudioHandler extends as_pkg.BaseAudioHandler with as_pkg.SeekHandler {
 
   /// Fetch artist image from Wikipedia API.
   Future<List<int>?> _fetchWikipediaArtistImage(String artist) async {
+    // Try the artist name directly, then with common disambiguation suffixes
+    final searchNames = [
+      artist.replaceAll(' ', '_'),
+      '${artist.replaceAll(' ', '_')}_(band)',
+      '${artist.replaceAll(' ', '_')}_(singer)',
+      '${artist.replaceAll(' ', '_')}_(musician)',
+      '${artist.replaceAll(' ', '_')}_(music)',
+    ];
+
+    for (final searchName in searchNames) {
+      final result = await _tryWikipediaPage(searchName);
+      if (result != null) return result;
+    }
+    return null;
+  }
+
+  Future<List<int>?> _tryWikipediaPage(String pageName) async {
     try {
       final client = HttpClient();
-      // Use Wikipedia API to get the main image for the artist
-      final searchName = artist.replaceAll(' ', '_');
       final apiUrl = Uri.parse(
-        'https://en.wikipedia.org/api/rest_v1/page/summary/$searchName',
+        'https://en.wikipedia.org/api/rest_v1/page/summary/$pageName',
       );
 
       final request = await client.getUrl(apiUrl);
@@ -269,6 +284,12 @@ class PigAudioHandler extends as_pkg.BaseAudioHandler with as_pkg.SeekHandler {
 
       final body = await response.transform(utf8.decoder).join();
       final data = _parseJson(body);
+
+      // Skip disambiguation pages
+      if (data != null && data['type'] == 'disambiguation') {
+        client.close();
+        return null;
+      }
 
       String? imageUrl;
       if (data != null && data['thumbnail'] != null) {
@@ -295,7 +316,7 @@ class PigAudioHandler extends as_pkg.BaseAudioHandler with as_pkg.SeekHandler {
       final bytes = <int>[];
       await for (final chunk in imgResponse) {
         bytes.addAll(chunk);
-        if (bytes.length > 500000) break; // Cap at 500KB
+        if (bytes.length > 500000) break;
       }
       client.close();
 
@@ -543,10 +564,11 @@ class PigAudioHandler extends as_pkg.BaseAudioHandler with as_pkg.SeekHandler {
 class AudioService extends ChangeNotifier {
   late final PigAudioHandler _handler;
   bool _initialized = false;
+  List<Song>? _pendingPlaylist;
+  int _pendingStartIndex = 0;
+  bool _pendingAutoPlay = true;
 
   bool get initialized => _initialized;
-
-  // Forward getters
   List<Song> get playlist => _initialized ? _handler.playlist : [];
   int get currentIndex => _initialized ? _handler.currentIndex : -1;
   bool get shuffle => _initialized ? _handler.isShuffle : false;
@@ -572,31 +594,48 @@ class AudioService extends ChangeNotifier {
   }
 
   Future<void> _init() async {
-    final handler = await as_pkg.AudioService.init(
-      builder: () => PigAudioHandler(),
-      config: const as_pkg.AudioServiceConfig(
-        androidNotificationChannelId: 'com.pig.pig_mobile.audio',
-        androidNotificationChannelName: 'PIG Music',
-        androidNotificationOngoing: true,
-        androidStopForegroundOnPause: true,
-        androidNotificationIcon: 'mipmap/ic_launcher',
-      ),
-    );
-    // ignore: unnecessary_cast
-    _handler = handler as PigAudioHandler;
+    try {
+      final handler = await as_pkg.AudioService.init(
+        builder: () => PigAudioHandler(),
+        config: const as_pkg.AudioServiceConfig(
+          androidNotificationChannelId: 'com.pig.pig_mobile.audio',
+          androidNotificationChannelName: 'PIG Music',
+          androidNotificationOngoing: true,
+          androidStopForegroundOnPause: true,
+          androidNotificationIcon: 'mipmap/ic_launcher',
+        ),
+      );
+      _handler = handler as PigAudioHandler;
+    } catch (e) {
+      debugPrint('AudioService.init failed: $e — using direct handler');
+      _handler = PigAudioHandler();
+    }
 
     _handler.onStateChanged = () => notifyListeners();
     _initialized = true;
+
+    if (_pendingPlaylist != null) {
+      _handler.setPlaylist(
+        _pendingPlaylist!,
+        startIndex: _pendingStartIndex,
+        autoPlay: _pendingAutoPlay,
+      );
+      _pendingPlaylist = null;
+    }
     notifyListeners();
   }
 
-  // Forward methods
   void setPlaylist(
     List<Song> songs, {
     int startIndex = 0,
     bool autoPlay = true,
   }) {
-    if (!_initialized) return;
+    if (!_initialized) {
+      _pendingPlaylist = songs;
+      _pendingStartIndex = startIndex;
+      _pendingAutoPlay = autoPlay;
+      return;
+    }
     _handler.setPlaylist(songs, startIndex: startIndex, autoPlay: autoPlay);
     notifyListeners();
   }

@@ -22,11 +22,11 @@ jobs:
 
       - name: Build APK
         working-directory: ./pig_mobile       
-        run: flutter build apk --release
+        run: flutter build apk --debug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: app-release
-          path: pig_mobile/build/app/outputs/flutter-apk/app-release.apk
+          name: pig-mobile-apk
+          path: pig_mobile/build/app/outputs/flutter-apk/app-debug.apk
 
