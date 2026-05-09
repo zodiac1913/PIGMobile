@@ -3,10 +3,13 @@ import 'package:provider/provider.dart';
 import '../models/song.dart';
 import '../services/audio_service.dart';
 import '../services/database_service.dart';
+import '../services/pig_web_service.dart';
+import '../services/settings_service.dart';
 import '../models/playlist.dart';
 import '../theme.dart';
 
 /// Browse screen — two collapsible panels: Music Selection and Queue.
+/// Toggle between Local music and PIG Web music.
 class BrowseScreen extends StatefulWidget {
   const BrowseScreen({super.key});
 
@@ -16,6 +19,10 @@ class BrowseScreen extends StatefulWidget {
 
 class _BrowseScreenState extends State<BrowseScreen>
     with AutomaticKeepAliveClientMixin {
+  // Source toggle: false = Local, true = PIG Web
+  bool _useWeb = false;
+  final PigWebService _webService = PigWebService();
+
   // Filter data
   List<Playlist> _playlists = [];
   List<String> _folders = [];
@@ -50,15 +57,39 @@ class _BrowseScreenState extends State<BrowseScreen>
   @override
   void initState() {
     super.initState();
+    _initWebService();
     _loadFilters();
   }
 
+  Future<void> _initWebService() async {
+    final settings = SettingsService();
+    await settings.load();
+    if (settings.pigWebUrl != null && settings.pigWebUrl!.isNotEmpty) {
+      _webService.configure(settings.pigWebUrl!);
+      if (settings.pigWebToken != null && settings.pigWebUsername != null) {
+        _webService.setToken(settings.pigWebToken!, settings.pigWebUsername!);
+      }
+    }
+  }
+
   Future<void> _loadFilters() async {
-    final db = DatabaseService();
-    _playlists = await db.getAllPlaylists();
-    _folders = await db.getDistinctFolders();
-    _genres = await db.getDistinctGenres();
-    _artists = await db.getDistinctArtists();
+    setState(() => _filtersLoaded = false);
+    try {
+      if (_useWeb && _webService.isAuthenticated) {
+        _playlists = await _webService.getPlaylists();
+        _folders = await _webService.getFolders();
+        _genres = await _webService.getGenres();
+        _artists = await _webService.getArtists();
+      } else {
+        final db = DatabaseService();
+        _playlists = await db.getAllPlaylists();
+        _folders = await db.getDistinctFolders();
+        _genres = await db.getDistinctGenres();
+        _artists = await db.getDistinctArtists();
+      }
+    } catch (e) {
+      debugPrint('Failed to load filters: $e');
+    }
     setState(() => _filtersLoaded = true);
   }
 
@@ -68,15 +99,41 @@ class _BrowseScreenState extends State<BrowseScreen>
       return;
     }
     setState(() => _loading = true);
-    final db = DatabaseService();
-    _songs = await db.browseSongs(
-      playlistIds:
-          _selectedPlaylists.isNotEmpty ? _selectedPlaylists.toList() : null,
-      folders: _selectedFolders.isNotEmpty ? _selectedFolders.toList() : null,
-      genres: _selectedGenres.isNotEmpty ? _selectedGenres.toList() : null,
-      artists: _selectedArtists.isNotEmpty ? _selectedArtists.toList() : null,
-      pickedSongIds: _pickedSongIds.isNotEmpty ? _pickedSongIds.toList() : null,
-    );
+    try {
+      if (_useWeb && _webService.isAuthenticated) {
+        _songs = await _webService.browseSongs(
+          listIds: _selectedPlaylists.isNotEmpty
+              ? _selectedPlaylists.toList()
+              : null,
+          folders: _selectedFolders.isNotEmpty
+              ? _selectedFolders.toList()
+              : null,
+          genres: _selectedGenres.isNotEmpty ? _selectedGenres.toList() : null,
+          artists: _selectedArtists.isNotEmpty
+              ? _selectedArtists.toList()
+              : null,
+        );
+      } else {
+        final db = DatabaseService();
+        _songs = await db.browseSongs(
+          playlistIds: _selectedPlaylists.isNotEmpty
+              ? _selectedPlaylists.toList()
+              : null,
+          folders: _selectedFolders.isNotEmpty
+              ? _selectedFolders.toList()
+              : null,
+          genres: _selectedGenres.isNotEmpty ? _selectedGenres.toList() : null,
+          artists: _selectedArtists.isNotEmpty
+              ? _selectedArtists.toList()
+              : null,
+          pickedSongIds: _pickedSongIds.isNotEmpty
+              ? _pickedSongIds.toList()
+              : null,
+        );
+      }
+    } catch (e) {
+      debugPrint('Browse failed: $e');
+    }
     setState(() => _loading = false);
   }
 
@@ -100,6 +157,9 @@ class _BrowseScreenState extends State<BrowseScreen>
 
   void _playQueue() {
     final audio = context.read<AudioService>();
+    if (_useWeb) {
+      audio.setPigWebService(_webService);
+    }
     if (_songs.isNotEmpty) {
       audio.setPlaylist(_songs, startIndex: 0);
     }
@@ -107,6 +167,9 @@ class _BrowseScreenState extends State<BrowseScreen>
 
   void _playSong(int index) {
     final audio = context.read<AudioService>();
+    if (_useWeb) {
+      audio.setPigWebService(_webService);
+    }
     audio.setPlaylist(_songs, startIndex: index);
   }
 
@@ -129,16 +192,55 @@ class _BrowseScreenState extends State<BrowseScreen>
               ? '${_selectedPlaylists.length + _selectedFolders.length + _selectedGenres.length + _selectedArtists.length + (_pickedSongIds.isNotEmpty ? 1 : 0)}'
               : null,
           onTap: () => setState(() => _selectionOpen = !_selectionOpen),
-          trailing: _hasAnyFilter()
-              ? IconButton(
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Local/Web toggle
+              if (_webService.isAuthenticated)
+                GestureDetector(
+                  onTap: () {
+                    setState(() {
+                      _useWeb = !_useWeb;
+                      _clearAll();
+                    });
+                    _loadFilters();
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 3,
+                    ),
+                    decoration: BoxDecoration(
+                      color: _useWeb
+                          ? PigTheme.hotPink.withAlpha(40)
+                          : PigTheme.navy,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: _useWeb ? PigTheme.hotPink : Colors.grey,
+                      ),
+                    ),
+                    child: Text(
+                      _useWeb ? '🌐 Web' : '📱 Local',
+                      style: TextStyle(
+                        color: _useWeb ? PigTheme.hotPink : Colors.grey,
+                        fontSize: 11,
+                      ),
+                    ),
+                  ),
+                ),
+              if (_hasAnyFilter()) ...[
+                const SizedBox(width: 6),
+                IconButton(
                   icon: const Icon(Icons.clear_all, size: 20),
                   color: Colors.grey,
                   tooltip: 'Clear all selections',
                   onPressed: _clearAll,
                   padding: EdgeInsets.zero,
                   constraints: const BoxConstraints(),
-                )
-              : null,
+                ),
+              ],
+            ],
+          ),
         ),
         // Music Selection content
         if (_selectionOpen)
@@ -211,50 +313,55 @@ class _BrowseScreenState extends State<BrowseScreen>
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
                 : _songs.isEmpty
-                    ? const Center(
-                        child: Text('No songs queued',
-                            style: TextStyle(color: Colors.grey, fontSize: 13)))
-                    : ListView.builder(
-                        itemCount: _songs.length,
-                        itemBuilder: (context, index) {
-                          final song = _songs[index];
-                          final audio = context.watch<AudioService>();
-                          final isActive = audio.currentSong?.id == song.id;
-                          return Container(
-                            color: isActive
-                                ? PigTheme.maroon
-                                : Colors.transparent,
-                            child: ListTile(
-                              dense: true,
-                              title: Text(
-                                song.displayTitle,
-                                style: TextStyle(
-                                  color: isActive
-                                      ? PigTheme.hotPink
-                                      : Colors.white,
-                                  fontSize: 13,
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                              subtitle: Text(song.displayArtist,
-                                  style: const TextStyle(
-                                      color: Colors.grey, fontSize: 11),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis),
-                              onTap: () => _playSong(index),
+                ? const Center(
+                    child: Text(
+                      'No songs queued',
+                      style: TextStyle(color: Colors.grey, fontSize: 13),
+                    ),
+                  )
+                : ListView.builder(
+                    itemCount: _songs.length,
+                    itemBuilder: (context, index) {
+                      final song = _songs[index];
+                      final audio = context.watch<AudioService>();
+                      final isActive = audio.currentSong?.id == song.id;
+                      return Container(
+                        color: isActive ? PigTheme.maroon : Colors.transparent,
+                        child: ListTile(
+                          dense: true,
+                          title: Text(
+                            song.displayTitle,
+                            style: TextStyle(
+                              color: isActive ? PigTheme.hotPink : Colors.white,
+                              fontSize: 13,
                             ),
-                          );
-                        },
-                      ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          subtitle: Text(
+                            song.displayArtist,
+                            style: const TextStyle(
+                              color: Colors.grey,
+                              fontSize: 11,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          onTap: () => _playSong(index),
+                        ),
+                      );
+                    },
+                  ),
           ),
 
         // If both panels closed, show a hint
         if (!_selectionOpen && !_queueOpen)
           const Expanded(
             child: Center(
-              child: Text('Tap a panel header to expand',
-                  style: TextStyle(color: Colors.grey)),
+              child: Text(
+                'Tap a panel header to expand',
+                style: TextStyle(color: Colors.grey),
+              ),
             ),
           ),
       ],
@@ -283,23 +390,26 @@ class _BrowseScreenState extends State<BrowseScreen>
           children: [
             Icon(icon, color: PigTheme.goldenrod, size: 20),
             const SizedBox(width: 8),
-            Text(title,
-                style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 20,
-                    fontWeight: FontWeight.w600)),
+            Text(
+              title,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 20,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
             if (badge != null) ...[
               const SizedBox(width: 8),
               Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
                 decoration: BoxDecoration(
                   color: PigTheme.hotPink,
                   borderRadius: BorderRadius.circular(10),
                 ),
-                child: Text(badge,
-                    style: const TextStyle(
-                        color: Colors.white, fontSize: 18)),
+                child: Text(
+                  badge,
+                  style: const TextStyle(color: Colors.white, fontSize: 18),
+                ),
               ),
             ],
             const Spacer(),
@@ -336,8 +446,10 @@ class _BrowseScreenState extends State<BrowseScreen>
         leading: Icon(icon, color: PigTheme.goldenrod, size: 18),
         title: Row(
           children: [
-            Text(title,
-                style: const TextStyle(color: Colors.white, fontSize: 12)),
+            Text(
+              title,
+              style: const TextStyle(color: Colors.white, fontSize: 12),
+            ),
             const Spacer(),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
@@ -345,8 +457,10 @@ class _BrowseScreenState extends State<BrowseScreen>
                 color: count > 0 ? PigTheme.hotPink : Colors.grey,
                 borderRadius: BorderRadius.circular(8),
               ),
-              child: Text(count > 0 ? '$count' : '$total',
-                  style: const TextStyle(color: Colors.white, fontSize: 10)),
+              child: Text(
+                count > 0 ? '$count' : '$total',
+                style: const TextStyle(color: Colors.white, fontSize: 10),
+              ),
             ),
           ],
         ),
@@ -358,8 +472,10 @@ class _BrowseScreenState extends State<BrowseScreen>
               decoration: const InputDecoration(
                 hintText: '🔍 Filter...',
                 isDense: true,
-                contentPadding:
-                    EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                contentPadding: EdgeInsets.symmetric(
+                  horizontal: 8,
+                  vertical: 6,
+                ),
               ),
               style: const TextStyle(color: Colors.white, fontSize: 12),
               onChanged: (_) => setState(() {}),
@@ -370,9 +486,8 @@ class _BrowseScreenState extends State<BrowseScreen>
             child: isArtist
                 ? _buildLazyArtistList()
                 : isPlaylist
-                    ? _buildPlaylistList()
-                    : _buildStringList(stringItems!, selected!,
-                        searchController),
+                ? _buildPlaylistList()
+                : _buildStringList(stringItems!, selected!, searchController),
           ),
         ],
       ),
@@ -413,10 +528,12 @@ class _BrowseScreenState extends State<BrowseScreen>
             ),
             const SizedBox(width: 6),
             Expanded(
-              child: Text(pl.title,
-                  style: const TextStyle(color: Colors.white, fontSize: 12),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis),
+              child: Text(
+                pl.title,
+                style: const TextStyle(color: Colors.white, fontSize: 12),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
           ],
         );
@@ -425,7 +542,10 @@ class _BrowseScreenState extends State<BrowseScreen>
   }
 
   Widget _buildStringList(
-      List<String> items, Set<String> selected, TextEditingController search) {
+    List<String> items,
+    Set<String> selected,
+    TextEditingController search,
+  ) {
     final filter = search.text.toLowerCase();
     final filtered = items
         .where((i) => filter.isEmpty || i.toLowerCase().contains(filter))
@@ -459,10 +579,12 @@ class _BrowseScreenState extends State<BrowseScreen>
             ),
             const SizedBox(width: 6),
             Expanded(
-              child: Text(item,
-                  style: const TextStyle(color: Colors.white, fontSize: 12),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis),
+              child: Text(
+                item,
+                style: const TextStyle(color: Colors.white, fontSize: 12),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
           ],
         );
@@ -504,17 +626,22 @@ class _BrowseScreenState extends State<BrowseScreen>
             ),
             const SizedBox(width: 6),
             Expanded(
-              child: Text(artist,
-                  style: const TextStyle(color: Colors.white, fontSize: 12),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis),
+              child: Text(
+                artist,
+                style: const TextStyle(color: Colors.white, fontSize: 12),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
             GestureDetector(
               onTap: () => _openArtistSongs(artist),
               child: const Padding(
                 padding: EdgeInsets.only(right: 4),
-                child: Icon(Icons.music_note_outlined,
-                    color: PigTheme.goldenrod, size: 18),
+                child: Icon(
+                  Icons.music_note_outlined,
+                  color: PigTheme.goldenrod,
+                  size: 18,
+                ),
               ),
             ),
           ],
@@ -542,124 +669,153 @@ class _BrowseScreenState extends State<BrowseScreen>
         side: BorderSide(color: PigTheme.maroon, width: 2),
       ),
       builder: (ctx) {
-        return StatefulBuilder(builder: (ctx, setSheetState) {
-          return DraggableScrollableSheet(
-            initialChildSize: 0.6,
-            minChildSize: 0.3,
-            maxChildSize: 0.9,
-            expand: false,
-            builder: (ctx, scrollController) {
-              return Column(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: const BoxDecoration(
-                      color: PigTheme.maroon,
-                      borderRadius:
-                          BorderRadius.vertical(top: Radius.circular(14)),
-                    ),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Text(artist,
-                              style: const TextStyle(
-                                  color: PigTheme.hotPink,
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.bold),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis),
+        return StatefulBuilder(
+          builder: (ctx, setSheetState) {
+            return DraggableScrollableSheet(
+              initialChildSize: 0.6,
+              minChildSize: 0.3,
+              maxChildSize: 0.9,
+              expand: false,
+              builder: (ctx, scrollController) {
+                return Column(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: const BoxDecoration(
+                        color: PigTheme.maroon,
+                        borderRadius: BorderRadius.vertical(
+                          top: Radius.circular(14),
                         ),
-                        Text('${checked.length} selected',
+                      ),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              artist,
+                              style: const TextStyle(
+                                color: PigTheme.hotPink,
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          Text(
+                            '${checked.length} selected',
                             style: const TextStyle(
-                                color: Colors.grey, fontSize: 12)),
-                      ],
-                    ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 4),
-                    child: Row(
-                      children: [
-                        TextButton(
-                          onPressed: () => setSheetState(() => checked.addAll(
-                              songs
-                                  .where((s) => s.id != null)
-                                  .map((s) => s.id!))),
-                          child: const Text('Select All',
-                              style: TextStyle(fontSize: 12)),
-                        ),
-                        TextButton(
-                          onPressed: () =>
-                              setSheetState(() => checked.clear()),
-                          child: const Text('None',
-                              style:
-                                  TextStyle(fontSize: 12, color: Colors.grey)),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Expanded(
-                    child: ListView.builder(
-                      controller: scrollController,
-                      itemCount: songs.length,
-                      itemBuilder: (ctx, i) {
-                        final song = songs[i];
-                        return CheckboxListTile(
-                          dense: true,
-                          contentPadding:
-                              const EdgeInsets.symmetric(horizontal: 12),
-                          value:
-                              song.id != null && checked.contains(song.id),
-                          onChanged: (val) {
-                            if (song.id == null) return;
-                            setSheetState(() {
-                              if (val == true) {
-                                checked.add(song.id!);
-                              } else {
-                                checked.remove(song.id);
-                              }
-                            });
-                          },
-                          title: Text(song.displayTitle,
-                              style: const TextStyle(
-                                  color: Colors.white, fontSize: 13),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis),
-                          subtitle: song.displayAlbum.isNotEmpty
-                              ? Text(song.displayAlbum,
-                                  style: const TextStyle(
-                                      color: Colors.grey, fontSize: 11))
-                              : null,
-                        );
-                      },
-                    ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton(
-                        onPressed: () {
-                          for (final s in songs) {
-                            if (s.id != null) _pickedSongIds.remove(s.id);
-                          }
-                          _pickedSongIds.addAll(checked);
-                          Navigator.pop(ctx);
-                          _browse();
-                        },
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: PigTheme.maroon,
-                          foregroundColor: PigTheme.hotPink,
-                        ),
-                        child: const Text('Apply'),
+                              color: Colors.grey,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                  ),
-                ],
-              );
-            },
-          );
-        });
+                    Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 4,
+                      ),
+                      child: Row(
+                        children: [
+                          TextButton(
+                            onPressed: () => setSheetState(
+                              () => checked.addAll(
+                                songs
+                                    .where((s) => s.id != null)
+                                    .map((s) => s.id!),
+                              ),
+                            ),
+                            child: const Text(
+                              'Select All',
+                              style: TextStyle(fontSize: 12),
+                            ),
+                          ),
+                          TextButton(
+                            onPressed: () =>
+                                setSheetState(() => checked.clear()),
+                            child: const Text(
+                              'None',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.grey,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Expanded(
+                      child: ListView.builder(
+                        controller: scrollController,
+                        itemCount: songs.length,
+                        itemBuilder: (ctx, i) {
+                          final song = songs[i];
+                          return CheckboxListTile(
+                            dense: true,
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                            ),
+                            value: song.id != null && checked.contains(song.id),
+                            onChanged: (val) {
+                              if (song.id == null) return;
+                              setSheetState(() {
+                                if (val == true) {
+                                  checked.add(song.id!);
+                                } else {
+                                  checked.remove(song.id);
+                                }
+                              });
+                            },
+                            title: Text(
+                              song.displayTitle,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 13,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            subtitle: song.displayAlbum.isNotEmpty
+                                ? Text(
+                                    song.displayAlbum,
+                                    style: const TextStyle(
+                                      color: Colors.grey,
+                                      fontSize: 11,
+                                    ),
+                                  )
+                                : null,
+                          );
+                        },
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton(
+                          onPressed: () {
+                            for (final s in songs) {
+                              if (s.id != null) _pickedSongIds.remove(s.id);
+                            }
+                            _pickedSongIds.addAll(checked);
+                            Navigator.pop(ctx);
+                            _browse();
+                          },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: PigTheme.maroon,
+                            foregroundColor: PigTheme.hotPink,
+                          ),
+                          child: const Text('Apply'),
+                        ),
+                      ),
+                    ),
+                  ],
+                );
+              },
+            );
+          },
+        );
       },
     );
   }

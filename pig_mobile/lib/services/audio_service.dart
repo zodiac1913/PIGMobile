@@ -1,21 +1,23 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:just_audio/just_audio.dart';
-import 'package:audio_service/audio_service.dart' as audio_svc;
+import 'package:audio_service/audio_service.dart' as as_pkg;
 import 'package:audio_metadata_reader/audio_metadata_reader.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import '../models/song.dart';
 import 'database_service.dart';
+import 'pig_web_service.dart';
 
 /// Playback repeat modes — matches PIGv4's off/all/one.
 enum PigRepeatMode { off, all, one }
 
-/// Audio player service with media session for Bluetooth/Android Auto/CarPlay.
-class AudioService extends ChangeNotifier {
+/// The audio handler that integrates with the system media session.
+/// Bluetooth, Android Auto, lock screen, notifications all talk to this.
+class PigAudioHandler extends as_pkg.BaseAudioHandler with as_pkg.SeekHandler {
   final AudioPlayer _player = AudioPlayer();
-  late final audio_svc.AudioHandler _audioHandler;
-  bool _handlerInitialized = false;
+  PigWebService? pigWebService;
 
   List<Song> _playlist = [];
   List<Song> _originalPlaylist = [];
@@ -23,151 +25,180 @@ class AudioService extends ChangeNotifier {
   bool _shuffle = false;
   PigRepeatMode _repeatMode = PigRepeatMode.off;
   Song? _currentSong;
-  bool _isLoading = false;
   Uint8List? _currentAlbumArt;
   List<String> _currentPlaylists = [];
+  bool _keepScreenOn = false;
+
+  // Callback to notify the ChangeNotifier wrapper
+  VoidCallback? onStateChanged;
 
   // Public getters
   List<Song> get playlist => _playlist;
   int get currentIndex => _currentIndex;
-  bool get shuffle => _shuffle;
+  bool get isShuffle => _shuffle;
   PigRepeatMode get repeatMode => _repeatMode;
   Song? get currentSong => _currentSong;
-  bool get isLoading => _isLoading;
-  bool get isPlaying => _player.playing;
-  Duration get position => _player.position;
-  Duration get duration => _player.duration ?? Duration.zero;
   double get volume => _player.volume;
+  Duration get position => _player.position;
+  Duration get dur => _player.duration ?? Duration.zero;
   Stream<Duration> get positionStream => _player.positionStream;
   Stream<PlayerState> get playerStateStream => _player.playerStateStream;
   Uint8List? get currentAlbumArt => _currentAlbumArt;
   List<String> get currentPlaylists => _currentPlaylists;
+  bool get keepScreenOn => _keepScreenOn;
+  bool get isPlaying => _player.playing;
 
-  AudioService() {
+  PigAudioHandler() {
     _player.playerStateStream.listen((state) {
       if (state.processingState == ProcessingState.completed) {
-        next();
+        skipToNext();
       }
-      _updateMediaSession();
+      _broadcastState();
+      onStateChanged?.call();
     });
-    _initAudioHandler();
   }
 
-  Future<void> _initAudioHandler() async {
-    try {
-      _audioHandler = await audio_svc.AudioService.init(
-        builder: () => _PigAudioHandler(this),
-        config: const audio_svc.AudioServiceConfig(
-          androidNotificationChannelId: 'com.pig.pig_mobile.audio',
-          androidNotificationChannelName: 'PIG Music',
-          androidNotificationOngoing: true,
-          androidStopForegroundOnPause: true,
-        ),
-      );
-      _handlerInitialized = true;
-    } catch (e) {
-      debugPrint('Audio handler init failed: $e');
+  /// Broadcast playback state to the system.
+  void _broadcastState() {
+    playbackState.add(
+      as_pkg.PlaybackState(
+        controls: [
+          as_pkg.MediaControl.skipToPrevious,
+          if (_player.playing)
+            as_pkg.MediaControl.pause
+          else
+            as_pkg.MediaControl.play,
+          as_pkg.MediaControl.stop,
+          as_pkg.MediaControl.skipToNext,
+        ],
+        systemActions: const {
+          as_pkg.MediaAction.seek,
+          as_pkg.MediaAction.seekForward,
+          as_pkg.MediaAction.seekBackward,
+          as_pkg.MediaAction.skipToNext,
+          as_pkg.MediaAction.skipToPrevious,
+        },
+        androidCompactActionIndices: const [0, 1, 3],
+        processingState: _mapState(_player.processingState),
+        playing: _player.playing,
+        updatePosition: _player.position,
+        bufferedPosition: _player.bufferedPosition,
+        speed: _player.speed,
+        queueIndex: _currentIndex >= 0 ? _currentIndex : null,
+      ),
+    );
+  }
+
+  as_pkg.AudioProcessingState _mapState(ProcessingState state) {
+    switch (state) {
+      case ProcessingState.idle:
+        return as_pkg.AudioProcessingState.idle;
+      case ProcessingState.loading:
+        return as_pkg.AudioProcessingState.loading;
+      case ProcessingState.buffering:
+        return as_pkg.AudioProcessingState.buffering;
+      case ProcessingState.ready:
+        return as_pkg.AudioProcessingState.ready;
+      case ProcessingState.completed:
+        return as_pkg.AudioProcessingState.completed;
     }
   }
 
-  void _updateMediaSession() {
-    if (!_handlerInitialized || _currentSong == null) return;
-    try {
-      final song = _currentSong!;
-      final handler = _audioHandler as _PigAudioHandler;
-      handler.setMediaItem(audio_svc.MediaItem(
+  void _broadcastMediaItem() {
+    if (_currentSong == null) return;
+    final song = _currentSong!;
+    mediaItem.add(
+      as_pkg.MediaItem(
         id: song.filePath,
         title: song.displayTitle,
         artist: song.displayArtist,
         album: song.displayAlbum,
         duration: _player.duration,
         genre: song.genre,
-      ));
-      handler.setPlaybackState(audio_svc.PlaybackState(
-        controls: [
-          audio_svc.MediaControl.skipToPrevious,
-          _player.playing ? audio_svc.MediaControl.pause : audio_svc.MediaControl.play,
-          audio_svc.MediaControl.stop,
-          audio_svc.MediaControl.skipToNext,
-        ],
-        systemActions: const {
-          audio_svc.MediaAction.seek,
-          audio_svc.MediaAction.seekForward,
-          audio_svc.MediaAction.seekBackward,
-        },
-        androidCompactActionIndices: const [0, 1, 3],
-        processingState: audio_svc.AudioProcessingState.ready,
-        playing: _player.playing,
-        updatePosition: _player.position,
-        speed: 1.0,
-      ));
-    } catch (e) {
-      debugPrint('Media session update failed: $e');
-    }
+      ),
+    );
   }
 
-  /// Load a playlist and optionally start playing.
-  void setPlaylist(List<Song> songs,
-      {int startIndex = 0, bool autoPlay = true}) {
+  // ── Playlist management ──
+
+  void setPlaylist(
+    List<Song> songs, {
+    int startIndex = 0,
+    bool autoPlay = true,
+  }) {
     _originalPlaylist = List.from(songs);
     _playlist = List.from(songs);
     if (_shuffle) _shufflePlaylist();
     _currentIndex = startIndex;
+
+    // Update queue for Android Auto browsing
+    queue.add(
+      _playlist
+          .map(
+            (s) => as_pkg.MediaItem(
+              id: s.filePath,
+              title: s.displayTitle,
+              artist: s.displayArtist,
+              album: s.displayAlbum,
+              genre: s.genre,
+            ),
+          )
+          .toList(),
+    );
+
     if (autoPlay && _playlist.isNotEmpty) {
-      playSong(_playlist[_currentIndex]);
+      _playSongAtIndex(_currentIndex);
     }
-    notifyListeners();
   }
 
-  /// Play a specific song.
-  Future<void> playSong(Song song) async {
+  Future<void> _playSongAtIndex(int index) async {
+    if (index < 0 || index >= _playlist.length) return;
+    _currentIndex = index;
+    final song = _playlist[index];
     _currentSong = song;
-    _isLoading = true;
     _currentAlbumArt = null;
     _currentPlaylists = [];
-    notifyListeners();
+    onStateChanged?.call();
 
     try {
-      await _player.setFilePath(song.filePath);
-      await _player.play();
-      final idx = _playlist.indexWhere((s) => s.id == song.id);
-      if (idx >= 0) _currentIndex = idx;
-
-      // Load album art and playlist info in background
+      if (song.filePath.startsWith('web://')) {
+        final pieceId = int.tryParse(song.filePath.replaceFirst('web://', ''));
+        if (pieceId != null && pigWebService != null) {
+          final url = pigWebService!.getStreamUrl(pieceId);
+          await _player.setUrl(url, headers: pigWebService!.authHeaders);
+        }
+      } else {
+        await _player.setFilePath(song.filePath);
+      }
+      _player.play();
+      _broadcastMediaItem();
       _loadSongExtras(song);
     } catch (e) {
       debugPrint('Error playing ${song.filePath}: $e');
     }
-
-    _isLoading = false;
-    notifyListeners();
-    _updateMediaSession();
+    onStateChanged?.call();
   }
 
-  /// Load album art from embedded tags and playlist names.
   Future<void> _loadSongExtras(Song song) async {
-    if (song.id == null) return;
+    if (song.id == null || song.filePath.startsWith('web://')) return;
     final db = DatabaseService();
 
-    // Load playlist names
     _currentPlaylists = await db.getPlaylistNamesForSong(song.id!);
 
-    // Try cached album art first
     final cached = await db.getAlbumArt(song.id!);
     if (cached != null) {
       _currentAlbumArt = Uint8List.fromList(cached);
-      notifyListeners();
+      _broadcastMediaItem();
+      onStateChanged?.call();
       return;
     }
 
-    // Check if already looked up
     final checked = await db.isAlbumArtChecked(song.id!);
     if (checked) {
-      notifyListeners();
+      onStateChanged?.call();
       return;
     }
 
-    // Try to extract from the file's embedded tags
     try {
       final file = File(song.filePath);
       if (await file.exists()) {
@@ -176,44 +207,234 @@ class AudioService extends ChangeNotifier {
           final artBytes = metadata.pictures.first.bytes;
           _currentAlbumArt = Uint8List.fromList(artBytes);
           await db.setAlbumArt(song.id!, artBytes);
-          notifyListeners();
+          _broadcastMediaItem();
+          onStateChanged?.call();
           return;
         }
       }
     } catch (_) {}
 
-    // Mark as checked (no art found)
+    // Step 2: Try MusicBrainz / Cover Art Archive (actual album cover)
+    if (song.artist != null && song.artist!.isNotEmpty) {
+      try {
+        final artBytes = await _fetchCoverArtArchive(song.artist!, song.album);
+        if (artBytes != null) {
+          _currentAlbumArt = Uint8List.fromList(artBytes);
+          await db.setAlbumArt(song.id!, artBytes);
+          _broadcastMediaItem();
+          onStateChanged?.call();
+          return;
+        }
+      } catch (_) {}
+    }
+
+    // Step 3: Fallback — try Wikipedia artist image
+    if (_currentSong?.artist != null && _currentSong!.artist!.isNotEmpty) {
+      try {
+        final artBytes = await _fetchWikipediaArtistImage(
+          _currentSong!.artist!,
+        );
+        if (artBytes != null) {
+          _currentAlbumArt = Uint8List.fromList(artBytes);
+          await db.setAlbumArt(song.id!, artBytes);
+          _broadcastMediaItem();
+          onStateChanged?.call();
+          return;
+        }
+      } catch (_) {}
+    }
+
     await db.setAlbumArt(song.id!, null);
-    notifyListeners();
+    onStateChanged?.call();
   }
 
-  Future<void> toggle() async {
-    if (_currentSong == null) {
-      if (_playlist.isNotEmpty) {
-        _currentIndex = 0;
-        await playSong(_playlist[0]);
+  /// Fetch artist image from Wikipedia API.
+  Future<List<int>?> _fetchWikipediaArtistImage(String artist) async {
+    try {
+      final client = HttpClient();
+      // Use Wikipedia API to get the main image for the artist
+      final searchName = artist.replaceAll(' ', '_');
+      final apiUrl = Uri.parse(
+        'https://en.wikipedia.org/api/rest_v1/page/summary/$searchName',
+      );
+
+      final request = await client.getUrl(apiUrl);
+      request.headers.set('User-Agent', 'PIGMobile/1.0');
+      final response = await request.close();
+
+      if (response.statusCode != 200) {
+        client.close();
+        return null;
       }
-      return;
+
+      final body = await response.transform(utf8.decoder).join();
+      final data = _parseJson(body);
+
+      String? imageUrl;
+      if (data != null && data['thumbnail'] != null) {
+        imageUrl = data['thumbnail']['source'];
+      } else if (data != null && data['originalimage'] != null) {
+        imageUrl = data['originalimage']['source'];
+      }
+
+      if (imageUrl == null || imageUrl.isEmpty) {
+        client.close();
+        return null;
+      }
+
+      // Download the image
+      final imgRequest = await client.getUrl(Uri.parse(imageUrl));
+      imgRequest.headers.set('User-Agent', 'PIGMobile/1.0');
+      final imgResponse = await imgRequest.close();
+
+      if (imgResponse.statusCode != 200) {
+        client.close();
+        return null;
+      }
+
+      final bytes = <int>[];
+      await for (final chunk in imgResponse) {
+        bytes.addAll(chunk);
+        if (bytes.length > 500000) break; // Cap at 500KB
+      }
+      client.close();
+
+      if (bytes.isEmpty) return null;
+      return bytes;
+    } catch (_) {
+      return null;
     }
-    if (_player.playing) {
-      await _player.pause();
-    } else {
-      await _player.play();
-    }
-    notifyListeners();
   }
 
+  /// Fetch album cover from MusicBrainz + Cover Art Archive.
+  /// Searches by artist + album, then grabs the front cover image.
+  Future<List<int>?> _fetchCoverArtArchive(String artist, String? album) async {
+    if (album == null || album.isEmpty) return null;
+
+    try {
+      final client = HttpClient();
+
+      // Search MusicBrainz for the release
+      final query =
+          'artist:${Uri.encodeComponent(artist)}+release:${Uri.encodeComponent(album)}';
+      final searchUrl = Uri.parse(
+        'https://musicbrainz.org/ws/2/release/?query=$query&fmt=json&limit=1',
+      );
+
+      final request = await client.getUrl(searchUrl);
+      request.headers.set('User-Agent', 'PIGMobile/1.0 (pig-music-player)');
+      final response = await request.close();
+
+      if (response.statusCode != 200) {
+        client.close();
+        return null;
+      }
+
+      final body = await response.transform(utf8.decoder).join();
+      final data = _parseJson(body);
+      if (data == null) {
+        client.close();
+        return null;
+      }
+
+      final releases = data['releases'] as List?;
+      if (releases == null || releases.isEmpty) {
+        client.close();
+        return null;
+      }
+
+      final releaseId = releases[0]['id'] as String?;
+      if (releaseId == null || releaseId.isEmpty) {
+        client.close();
+        return null;
+      }
+
+      // Get the front cover from Cover Art Archive
+      final coverUrl = Uri.parse(
+        'https://coverartarchive.org/release/$releaseId/front-250',
+      );
+
+      final coverRequest = await client.getUrl(coverUrl);
+      coverRequest.headers.set('User-Agent', 'PIGMobile/1.0');
+      coverRequest.followRedirects = true;
+      final coverResponse = await coverRequest.close();
+
+      if (coverResponse.statusCode != 200 && coverResponse.statusCode != 307) {
+        client.close();
+        return null;
+      }
+
+      // Handle redirect
+      if (coverResponse.statusCode == 307) {
+        final redirectUrl = coverResponse.headers.value('location');
+        if (redirectUrl == null) {
+          client.close();
+          return null;
+        }
+        final redirectRequest = await client.getUrl(Uri.parse(redirectUrl));
+        redirectRequest.headers.set('User-Agent', 'PIGMobile/1.0');
+        final redirectResponse = await redirectRequest.close();
+        if (redirectResponse.statusCode != 200) {
+          client.close();
+          return null;
+        }
+        final bytes = <int>[];
+        await for (final chunk in redirectResponse) {
+          bytes.addAll(chunk);
+          if (bytes.length > 500000) break;
+        }
+        client.close();
+        return bytes.isNotEmpty ? bytes : null;
+      }
+
+      final bytes = <int>[];
+      await for (final chunk in coverResponse) {
+        bytes.addAll(chunk);
+        if (bytes.length > 500000) break;
+      }
+      client.close();
+      return bytes.isNotEmpty ? bytes : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Simple JSON parser using dart:convert.
+  Map<String, dynamic>? _parseJson(String body) {
+    try {
+      return jsonDecode(body) as Map<String, dynamic>;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // ── System transport controls ──
+
+  @override
+  Future<void> play() async {
+    if (_currentSong == null && _playlist.isNotEmpty) {
+      await _playSongAtIndex(0);
+    } else {
+      _player.play();
+    }
+  }
+
+  @override
+  Future<void> pause() async => await _player.pause();
+
+  @override
   Future<void> stop() async {
     await _player.stop();
     await _player.seek(Duration.zero);
-    notifyListeners();
+    _broadcastState();
   }
 
-  Future<void> next() async {
+  @override
+  Future<void> skipToNext() async {
     if (_playlist.isEmpty) return;
     if (_repeatMode == PigRepeatMode.one) {
       await _player.seek(Duration.zero);
-      await _player.play();
+      _player.play();
       return;
     }
     _currentIndex++;
@@ -227,28 +448,44 @@ class AudioService extends ChangeNotifier {
         return;
       }
     }
-    await playSong(_playlist[_currentIndex]);
+    await _playSongAtIndex(_currentIndex);
   }
 
-  Future<void> prev() async {
+  @override
+  Future<void> skipToPrevious() async {
     if (_playlist.isEmpty) return;
     if (_player.position.inSeconds > 3) {
       await _player.seek(Duration.zero);
       return;
     }
-    _currentIndex =
-        (_currentIndex - 1 + _playlist.length) % _playlist.length;
-    await playSong(_playlist[_currentIndex]);
+    _currentIndex = (_currentIndex - 1 + _playlist.length) % _playlist.length;
+    await _playSongAtIndex(_currentIndex);
   }
 
-  Future<void> seek(Duration position) async {
-    await _player.seek(position);
+  @override
+  Future<void> seek(Duration position) async => await _player.seek(position);
+
+  @override
+  Future<void> skipToQueueItem(int index) async {
+    if (index >= 0 && index < _playlist.length) {
+      await _playSongAtIndex(index);
+    }
   }
 
-  Future<void> setVolume(double vol) async {
-    await _player.setVolume(vol.clamp(0.0, 1.0));
-    notifyListeners();
+  // ── Custom methods for UI ──
+
+  Future<void> toggle() async {
+    if (_currentSong == null && _playlist.isNotEmpty) {
+      await _playSongAtIndex(0);
+    } else if (_player.playing) {
+      await pause();
+    } else {
+      await play();
+    }
   }
+
+  Future<void> setVolume(double vol) async =>
+      await _player.setVolume(vol.clamp(0.0, 1.0));
 
   void toggleShuffle() {
     _shuffle = !_shuffle;
@@ -257,41 +494,30 @@ class AudioService extends ChangeNotifier {
     } else {
       _playlist = List.from(_originalPlaylist);
       if (_currentSong != null) {
-        _currentIndex =
-            _playlist.indexWhere((s) => s.id == _currentSong!.id);
+        _currentIndex = _playlist.indexWhere((s) => s.id == _currentSong!.id);
       }
     }
-    notifyListeners();
+    onStateChanged?.call();
   }
 
   void toggleRepeat() {
     switch (_repeatMode) {
       case PigRepeatMode.off:
         _repeatMode = PigRepeatMode.all;
-        break;
       case PigRepeatMode.all:
         _repeatMode = PigRepeatMode.one;
-        break;
       case PigRepeatMode.one:
         _repeatMode = PigRepeatMode.off;
-        break;
     }
-    notifyListeners();
+    onStateChanged?.call();
   }
 
-  /// Remove a song from the playlist by index (for the "X" button on upcoming).
   void removeFromPlaylist(int index) {
     if (index < 0 || index >= _playlist.length) return;
     _playlist.removeAt(index);
-    // Adjust current index if needed
-    if (index < _currentIndex) {
-      _currentIndex--;
-    }
-    notifyListeners();
+    if (index < _currentIndex) _currentIndex--;
+    onStateChanged?.call();
   }
-
-  bool _keepScreenOn = false;
-  bool get keepScreenOn => _keepScreenOn;
 
   void setKeepScreenOn(bool value) {
     _keepScreenOn = value;
@@ -300,7 +526,6 @@ class AudioService extends ChangeNotifier {
     } else {
       WakelockPlus.disable();
     }
-    notifyListeners();
   }
 
   void _shufflePlaylist() {
@@ -311,59 +536,132 @@ class AudioService extends ChangeNotifier {
       _playlist.insert(0, current);
       _currentIndex = 0;
     }
+  }
+}
+
+/// ChangeNotifier wrapper for Provider — bridges PigAudioHandler with Flutter widgets.
+class AudioService extends ChangeNotifier {
+  late final PigAudioHandler _handler;
+  bool _initialized = false;
+
+  bool get initialized => _initialized;
+
+  // Forward getters
+  List<Song> get playlist => _initialized ? _handler.playlist : [];
+  int get currentIndex => _initialized ? _handler.currentIndex : -1;
+  bool get shuffle => _initialized ? _handler.isShuffle : false;
+  PigRepeatMode get repeatMode =>
+      _initialized ? _handler.repeatMode : PigRepeatMode.off;
+  Song? get currentSong => _initialized ? _handler.currentSong : null;
+  bool get isPlaying => _initialized ? _handler.isPlaying : false;
+  Duration get position => _initialized ? _handler.position : Duration.zero;
+  Duration get duration => _initialized ? _handler.dur : Duration.zero;
+  double get volume => _initialized ? _handler.volume : 1.0;
+  Stream<Duration> get positionStream =>
+      _initialized ? _handler.positionStream : const Stream.empty();
+  Stream<PlayerState> get playerStateStream =>
+      _initialized ? _handler.playerStateStream : const Stream.empty();
+  Uint8List? get currentAlbumArt =>
+      _initialized ? _handler.currentAlbumArt : null;
+  List<String> get currentPlaylists =>
+      _initialized ? _handler.currentPlaylists : [];
+  bool get keepScreenOn => _initialized ? _handler.keepScreenOn : false;
+
+  AudioService() {
+    _init();
+  }
+
+  Future<void> _init() async {
+    final handler = await as_pkg.AudioService.init(
+      builder: () => PigAudioHandler(),
+      config: const as_pkg.AudioServiceConfig(
+        androidNotificationChannelId: 'com.pig.pig_mobile.audio',
+        androidNotificationChannelName: 'PIG Music',
+        androidNotificationOngoing: true,
+        androidStopForegroundOnPause: true,
+        androidNotificationIcon: 'mipmap/ic_launcher',
+      ),
+    );
+    // ignore: unnecessary_cast
+    _handler = handler as PigAudioHandler;
+
+    _handler.onStateChanged = () => notifyListeners();
+    _initialized = true;
     notifyListeners();
   }
 
-  @override
-  void dispose() {
-    _player.dispose();
-    super.dispose();
-  }
-}
-
-/// Audio handler for media session — routes Bluetooth/Auto/CarPlay controls.
-class _PigAudioHandler extends audio_svc.BaseAudioHandler
-    with audio_svc.SeekHandler {
-  final AudioService _service;
-
-  _PigAudioHandler(this._service);
-
-  void setMediaItem(audio_svc.MediaItem item) {
-    mediaItem.add(item);
+  // Forward methods
+  void setPlaylist(
+    List<Song> songs, {
+    int startIndex = 0,
+    bool autoPlay = true,
+  }) {
+    if (!_initialized) return;
+    _handler.setPlaylist(songs, startIndex: startIndex, autoPlay: autoPlay);
+    notifyListeners();
   }
 
-  void setPlaybackState(audio_svc.PlaybackState state) {
-    playbackState.add(state);
+  Future<void> toggle() async {
+    if (!_initialized) return;
+    await _handler.toggle();
+    notifyListeners();
   }
 
-  @override
-  Future<void> play() => _service.toggle();
+  Future<void> stop() async {
+    if (!_initialized) return;
+    await _handler.stop();
+    notifyListeners();
+  }
 
-  @override
-  Future<void> pause() => _service.toggle();
+  Future<void> next() async {
+    if (!_initialized) return;
+    await _handler.skipToNext();
+    notifyListeners();
+  }
 
-  @override
-  Future<void> stop() => _service.stop();
+  Future<void> prev() async {
+    if (!_initialized) return;
+    await _handler.skipToPrevious();
+    notifyListeners();
+  }
 
-  @override
-  Future<void> skipToNext() => _service.next();
+  Future<void> seek(Duration position) async {
+    if (!_initialized) return;
+    await _handler.seek(position);
+  }
 
-  @override
-  Future<void> skipToPrevious() => _service.prev();
+  Future<void> setVolume(double vol) async {
+    if (!_initialized) return;
+    await _handler.setVolume(vol);
+    notifyListeners();
+  }
 
-  @override
-  Future<void> seek(Duration position) => _service.seek(position);
-}
+  void toggleShuffle() {
+    if (!_initialized) return;
+    _handler.toggleShuffle();
+    notifyListeners();
+  }
 
-/// Platform init helper.
-class AudioServicePlatform {
-  static Future<audio_svc.AudioHandler> init({
-    required audio_svc.AudioHandler Function() builder,
-    audio_svc.AudioServiceConfig config = const audio_svc.AudioServiceConfig(),
-  }) async {
-    return await audio_svc.AudioService.init(
-      builder: builder,
-      config: config,
-    );
+  void toggleRepeat() {
+    if (!_initialized) return;
+    _handler.toggleRepeat();
+    notifyListeners();
+  }
+
+  void removeFromPlaylist(int index) {
+    if (!_initialized) return;
+    _handler.removeFromPlaylist(index);
+    notifyListeners();
+  }
+
+  void setKeepScreenOn(bool value) {
+    if (!_initialized) return;
+    _handler.setKeepScreenOn(value);
+    notifyListeners();
+  }
+
+  void setPigWebService(PigWebService? service) {
+    if (!_initialized) return;
+    _handler.pigWebService = service;
   }
 }

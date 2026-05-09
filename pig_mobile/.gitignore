@@ -11,6 +11,7 @@
 .svn/
 .swiftpm/
 migrate_working_dir/
+PIGv4/
 
 # IntelliJ related
 *.iml

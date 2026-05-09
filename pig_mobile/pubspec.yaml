@@ -1,7 +1,7 @@
 name: pig_mobile
 description: "PIG Mobile - Playlist Intelligent Generator for Android & iOS"
 publish_to: 'none'
-version: 1.0.0+1
+version: 2026.05.09+1
 
 environment:
   sdk: ^3.11.5
@@ -18,6 +18,8 @@ dependencies:
   path_provider: ^2.1.5
   # State management
   provider: ^6.1.4
+  # HTTP client for PIG Web API
+  http: ^1.2.0
   # Permissions
   permission_handler: ^11.4.0
   # Keep screen on

@@ -4,7 +4,10 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:audio_metadata_reader/audio_metadata_reader.dart';
 import '../services/database_service.dart';
 import '../services/scanner_service.dart';
+import '../services/pig_web_service.dart';
+import '../services/settings_service.dart';
 import '../theme.dart';
+import '../version.dart';
 
 /// Settings screen — scan music folder, prune deleted files, view stats.
 class SettingsScreen extends StatefulWidget {
@@ -22,10 +25,41 @@ class _SettingsScreenState extends State<SettingsScreen> {
   int _scanProgress = 0;
   int _scanTotal = 0;
 
+  // PIG Web settings
+  final _webUrlController = TextEditingController();
+  final _webUsernameController = TextEditingController();
+  final _webPasswordController = TextEditingController();
+  bool _webLoggedIn = false;
+  String? _webDisplayName;
+  bool _downloadWebMusic = false;
+  bool _onlyDownloadOnWifi = true;
+  String _webLoginStatus = '';
+
+  final PigWebService _webService = PigWebService();
+  final SettingsService _settings = SettingsService();
+
   @override
   void initState() {
     super.initState();
     _loadStats();
+    _loadWebSettings();
+  }
+
+  Future<void> _loadWebSettings() async {
+    await _settings.load();
+    setState(() {
+      _webUrlController.text = _settings.pigWebUrl ?? '';
+      _webLoggedIn = _settings.pigWebToken != null;
+      _webDisplayName = _settings.pigWebUsername;
+      _downloadWebMusic = _settings.downloadWebMusic;
+      _onlyDownloadOnWifi = _settings.onlyDownloadOnWifi;
+      if (_settings.pigWebUrl != null) {
+        _webService.configure(_settings.pigWebUrl!);
+      }
+      if (_settings.pigWebToken != null && _settings.pigWebUsername != null) {
+        _webService.setToken(_settings.pigWebToken!, _settings.pigWebUsername!);
+      }
+    });
   }
 
   Future<void> _loadStats() async {
@@ -75,7 +109,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final hasPermission = await _requestPermissions();
     if (!hasPermission) {
       setState(() {
-        _scanStatus = 'Permission denied. Please grant storage/media access in Settings.';
+        _scanStatus =
+            'Permission denied. Please grant storage/media access in Settings.';
       });
       // Offer to open app settings
       if (mounted) {
@@ -161,30 +196,36 @@ class _SettingsScreenState extends State<SettingsScreen> {
         final file = File(song.filePath);
         if (!await file.exists()) continue;
 
-        final metadata =
-            readMetadata(file, getImage: false);
+        final metadata = readMetadata(file, getImage: false);
 
         String? title = metadata.title;
         String? artist = metadata.artist;
         String? album = metadata.album;
-        String? genre =
-            metadata.genres.isNotEmpty ? metadata.genres.first : null;
+        String? genre = metadata.genres.isNotEmpty
+            ? metadata.genres.first
+            : null;
         int? year = metadata.year?.year;
         int? durationMs = metadata.duration?.inMilliseconds;
 
         // Only update if we got something new
         bool changed = false;
-        if (title != null && title.isNotEmpty && title != song.title) changed = true;
-        if (artist != null && artist.isNotEmpty && artist != song.artist) changed = true;
-        if (album != null && album.isNotEmpty && album != song.album) changed = true;
-        if (genre != null && genre.isNotEmpty && genre != song.genre) changed = true;
+        if (title != null && title.isNotEmpty && title != song.title)
+          changed = true;
+        if (artist != null && artist.isNotEmpty && artist != song.artist)
+          changed = true;
+        if (album != null && album.isNotEmpty && album != song.album)
+          changed = true;
+        if (genre != null && genre.isNotEmpty && genre != song.genre)
+          changed = true;
         if (year != null && year != song.year) changed = true;
         if (durationMs != null && durationMs != song.durationMs) changed = true;
 
         if (changed) {
           final updatedSong = song.copyWith(
             title: (title != null && title.isNotEmpty) ? title : song.title,
-            artist: (artist != null && artist.isNotEmpty) ? artist : song.artist,
+            artist: (artist != null && artist.isNotEmpty)
+                ? artist
+                : song.artist,
             album: (album != null && album.isNotEmpty) ? album : song.album,
             genre: (genre != null && genre.isNotEmpty) ? genre : song.genre,
             year: year ?? song.year,
@@ -238,8 +279,58 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
 
     setState(() {
-      _scanStatus = 'Playlists re-imported: ${result.playlistsImported} of ${result.totalPlaylists}';
+      _scanStatus =
+          'Playlists re-imported: ${result.playlistsImported} of ${result.totalPlaylists}';
       _scanning = false;
+    });
+  }
+
+  /// Login to PIG Web.
+  Future<void> _webLogin() async {
+    final url = _webUrlController.text.trim();
+    final username = _webUsernameController.text.trim();
+    final password = _webPasswordController.text.trim();
+
+    if (url.isEmpty || username.isEmpty || password.isEmpty) {
+      setState(() => _webLoginStatus = 'URL, username, and password required.');
+      return;
+    }
+
+    setState(() => _webLoginStatus = 'Logging in...');
+
+    try {
+      _webService.configure(url);
+      final result = await _webService.login(username, password, 'PIG Mobile');
+      final token = result['token'] as String;
+      final displayName = result['displayName'] as String? ?? username;
+
+      await _settings.setPigWebUrl(url);
+      await _settings.setPigWebToken(token);
+      await _settings.setPigWebUsername(displayName);
+
+      setState(() {
+        _webLoggedIn = true;
+        _webDisplayName = displayName;
+        _webLoginStatus = 'Connected!';
+        _webPasswordController.clear();
+      });
+    } catch (e) {
+      setState(() {
+        _webLoginStatus = 'Login failed: $e';
+        _webLoggedIn = false;
+      });
+    }
+  }
+
+  /// Logout from PIG Web.
+  Future<void> _webLogout() async {
+    _webService.logout();
+    await _settings.setPigWebToken(null);
+    await _settings.setPigWebUsername(null);
+    setState(() {
+      _webLoggedIn = false;
+      _webDisplayName = null;
+      _webLoginStatus = '';
     });
   }
 
@@ -277,7 +368,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
         }
       }
     } on PathAccessException catch (e) {
-      setState(() => _scanStatus = 'DIAG: Permission denied listing $_musicPath: $e');
+      setState(
+        () => _scanStatus = 'DIAG: Permission denied listing $_musicPath: $e',
+      );
       return;
     } catch (e) {
       setState(() => _scanStatus = 'DIAG: Error listing: $e');
@@ -285,7 +378,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
 
     setState(() {
-      _scanStatus = 'DIAG: $dirCount dirs, $fileCount files at $_musicPath\n${items.join('\n')}';
+      _scanStatus =
+          'DIAG: $dirCount dirs, $fileCount files at $_musicPath\n${items.join('\n')}';
     });
   }
 
@@ -305,7 +399,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
             return AlertDialog(
               backgroundColor: PigTheme.darkNavy,
               title: Text(
-                currentPath.split('/').last.isEmpty ? '/' : currentPath.split('/').last,
+                currentPath.split('/').last.isEmpty
+                    ? '/'
+                    : currentPath.split('/').last,
                 style: const TextStyle(color: PigTheme.hotPink, fontSize: 14),
               ),
               content: SizedBox(
@@ -319,8 +415,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     }
                     if (snapshot.hasError) {
                       return Center(
-                        child: Text('Error: ${snapshot.error}',
-                            style: const TextStyle(color: Colors.red, fontSize: 12)),
+                        child: Text(
+                          'Error: ${snapshot.error}',
+                          style: const TextStyle(
+                            color: Colors.red,
+                            fontSize: 12,
+                          ),
+                        ),
                       );
                     }
                     final entities = snapshot.data ?? [];
@@ -334,8 +435,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           padding: const EdgeInsets.all(8),
                           color: PigTheme.navy,
                           width: double.infinity,
-                          child: Text(currentPath,
-                              style: const TextStyle(color: Colors.grey, fontSize: 11)),
+                          child: Text(
+                            currentPath,
+                            style: const TextStyle(
+                              color: Colors.grey,
+                              fontSize: 11,
+                            ),
+                          ),
                         ),
                         const SizedBox(height: 4),
                         Expanded(
@@ -345,12 +451,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               if (currentPath != '/')
                                 ListTile(
                                   dense: true,
-                                  leading: const Icon(Icons.arrow_upward,
-                                      color: PigTheme.goldenrod, size: 20),
-                                  title: const Text('..',
-                                      style: TextStyle(color: Colors.white)),
+                                  leading: const Icon(
+                                    Icons.arrow_upward,
+                                    color: PigTheme.goldenrod,
+                                    size: 20,
+                                  ),
+                                  title: const Text(
+                                    '..',
+                                    style: TextStyle(color: Colors.white),
+                                  ),
                                   onTap: () {
-                                    final parent = Directory(currentPath).parent.path;
+                                    final parent = Directory(
+                                      currentPath,
+                                    ).parent.path;
                                     setDialogState(() => currentPath = parent);
                                   },
                                 ),
@@ -359,11 +472,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 final name = d.path.split('/').last;
                                 return ListTile(
                                   dense: true,
-                                  leading: const Icon(Icons.folder,
-                                      color: PigTheme.goldenrod, size: 20),
-                                  title: Text(name,
-                                      style: const TextStyle(
-                                          color: Colors.white, fontSize: 13)),
+                                  leading: const Icon(
+                                    Icons.folder,
+                                    color: PigTheme.goldenrod,
+                                    size: 20,
+                                  ),
+                                  title: Text(
+                                    name,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 13,
+                                    ),
+                                  ),
                                   onTap: () {
                                     setDialogState(() => currentPath = d.path);
                                   },
@@ -372,8 +492,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               if (dirs.isEmpty)
                                 const Padding(
                                   padding: EdgeInsets.all(16),
-                                  child: Text('No subdirectories',
-                                      style: TextStyle(color: Colors.grey)),
+                                  child: Text(
+                                    'No subdirectories',
+                                    style: TextStyle(color: Colors.grey),
+                                  ),
                                 ),
                             ],
                           ),
@@ -430,19 +552,34 @@ class _SettingsScreenState extends State<SettingsScreen> {
           Center(
             child: Column(
               children: [
-                Image.asset('assets/pig.png', width: 80, height: 80,
-                    errorBuilder: (_, e, s) => const Icon(
-                        Icons.music_note,
-                        size: 80,
-                        color: PigTheme.hotPink)),
+                Image.asset(
+                  'assets/pig.png',
+                  width: 80,
+                  height: 80,
+                  errorBuilder: (_, e, s) => const Icon(
+                    Icons.music_note,
+                    size: 80,
+                    color: PigTheme.hotPink,
+                  ),
+                ),
                 const SizedBox(height: 8),
-                const Text('PIG Mobile',
-                    style: TextStyle(
-                        color: PigTheme.hotPink,
-                        fontSize: 24,
-                        fontWeight: FontWeight.bold)),
-                const Text('Playlist Intelligent Generator',
-                    style: TextStyle(color: Colors.grey, fontSize: 12)),
+                const Text(
+                  'PIG Mobile',
+                  style: TextStyle(
+                    color: PigTheme.hotPink,
+                    fontSize: 24,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const Text(
+                  'Playlist Intelligent Generator',
+                  style: TextStyle(color: Colors.grey, fontSize: 12),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'v$appVersion',
+                  style: const TextStyle(color: Colors.grey, fontSize: 11),
+                ),
               ],
             ),
           ),
@@ -455,11 +592,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('Library',
-                      style: TextStyle(
-                          color: PigTheme.goldenrod,
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold)),
+                  const Text(
+                    'Library',
+                    style: TextStyle(
+                      color: PigTheme.goldenrod,
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
                   const SizedBox(height: 8),
                   _statRow('Songs in database', '$_songCount'),
                 ],
@@ -475,19 +615,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('Music Folder',
-                      style: TextStyle(
-                          color: PigTheme.goldenrod,
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold)),
+                  const Text(
+                    'Music Folder',
+                    style: TextStyle(
+                      color: PigTheme.goldenrod,
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
                   const SizedBox(height: 8),
                   TextField(
                     controller: TextEditingController(text: _musicPath),
                     decoration: InputDecoration(
                       hintText: 'Path to music folder',
-                      prefixIcon: const Icon(Icons.folder, color: PigTheme.goldenrod),
+                      prefixIcon: const Icon(
+                        Icons.folder,
+                        color: PigTheme.goldenrod,
+                      ),
                       suffixIcon: IconButton(
-                        icon: const Icon(Icons.folder_open, color: PigTheme.hotPink),
+                        icon: const Icon(
+                          Icons.folder_open,
+                          color: PigTheme.hotPink,
+                        ),
                         tooltip: 'Browse folders',
                         onPressed: () => _browseFolders('/storage/emulated/0'),
                       ),
@@ -499,9 +648,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   // Quick diagnostic
                   TextButton.icon(
                     onPressed: _diagnose,
-                    icon: const Icon(Icons.bug_report, size: 16, color: Colors.grey),
-                    label: const Text('Diagnose path',
-                        style: TextStyle(color: Colors.grey, fontSize: 12)),
+                    icon: const Icon(
+                      Icons.bug_report,
+                      size: 16,
+                      color: Colors.grey,
+                    ),
+                    label: const Text(
+                      'Diagnose path',
+                      style: TextStyle(color: Colors.grey, fontSize: 12),
+                    ),
                   ),
                   const SizedBox(height: 12),
                   Row(
@@ -513,7 +668,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 width: 16,
                                 height: 16,
                                 child: CircularProgressIndicator(
-                                    strokeWidth: 2))
+                                  strokeWidth: 2,
+                                ),
+                              )
                             : const Icon(Icons.refresh),
                         label: Text(_scanning ? 'Scanning...' : 'Scan'),
                         style: ElevatedButton.styleFrom(
@@ -563,19 +720,178 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       LinearProgressIndicator(
                         value: _scanProgress / _scanTotal,
                         backgroundColor: Colors.grey.shade800,
-                        valueColor: const AlwaysStoppedAnimation(PigTheme.hotPink),
+                        valueColor: const AlwaysStoppedAnimation(
+                          PigTheme.hotPink,
+                        ),
                       ),
                     const SizedBox(height: 4),
                     Text(
                       _scanTotal > 0
                           ? '$_scanProgress / $_scanTotal: $_scanStatus'
                           : _scanStatus,
-                      style:
-                          const TextStyle(color: Colors.grey, fontSize: 12),
+                      style: const TextStyle(color: Colors.grey, fontSize: 12),
                       maxLines: 15,
                       overflow: TextOverflow.ellipsis,
                     ),
                   ],
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+
+          // PIG Web
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'PIG Web',
+                    style: TextStyle(
+                      color: PigTheme.goldenrod,
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  const Text(
+                    'Connect to your PIG Web server to stream or download music.',
+                    style: TextStyle(color: Colors.grey, fontSize: 12),
+                  ),
+                  const SizedBox(height: 12),
+                  // URL
+                  TextField(
+                    controller: _webUrlController,
+                    decoration: const InputDecoration(
+                      hintText: 'https://piggy.dirtsailor.org',
+                      labelText: 'PIG Web URL',
+                      prefixIcon: Icon(Icons.link, color: PigTheme.goldenrod),
+                      isDense: true,
+                    ),
+                    style: const TextStyle(color: Colors.white, fontSize: 14),
+                    onChanged: (val) async {
+                      await _settings.setPigWebUrl(val.trim());
+                      if (val.trim().isNotEmpty) {
+                        _webService.configure(val.trim());
+                      }
+                    },
+                  ),
+                  const SizedBox(height: 12),
+                  // Login section
+                  if (!_webLoggedIn) ...[
+                    TextField(
+                      controller: _webUsernameController,
+                      decoration: const InputDecoration(
+                        hintText: 'Username',
+                        labelText: 'Username',
+                        prefixIcon: Icon(
+                          Icons.person,
+                          color: PigTheme.goldenrod,
+                        ),
+                        isDense: true,
+                      ),
+                      style: const TextStyle(color: Colors.white, fontSize: 14),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: _webPasswordController,
+                      obscureText: true,
+                      decoration: const InputDecoration(
+                        hintText: 'Password',
+                        labelText: 'Password',
+                        prefixIcon: Icon(Icons.lock, color: PigTheme.goldenrod),
+                        isDense: true,
+                      ),
+                      style: const TextStyle(color: Colors.white, fontSize: 14),
+                    ),
+                    const SizedBox(height: 10),
+                    ElevatedButton.icon(
+                      onPressed: _webLogin,
+                      icon: const Icon(Icons.login),
+                      label: const Text('Login'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: PigTheme.maroon,
+                        foregroundColor: PigTheme.hotPink,
+                      ),
+                    ),
+                  ] else ...[
+                    // Logged in state
+                    Row(
+                      children: [
+                        const Icon(
+                          Icons.check_circle,
+                          color: PigTheme.lawnGreen,
+                          size: 18,
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          'Logged in as $_webDisplayName',
+                          style: const TextStyle(
+                            color: PigTheme.lawnGreen,
+                            fontSize: 13,
+                          ),
+                        ),
+                        const Spacer(),
+                        TextButton(
+                          onPressed: _webLogout,
+                          child: const Text(
+                            'Logout',
+                            style: TextStyle(color: Colors.grey, fontSize: 12),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                  if (_webLoginStatus.isNotEmpty) ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      _webLoginStatus,
+                      style: TextStyle(
+                        color: _webLoggedIn ? PigTheme.lawnGreen : Colors.red,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 16),
+                  // Download toggles
+                  SwitchListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text(
+                      'Download Web Music',
+                      style: TextStyle(color: Colors.white, fontSize: 14),
+                    ),
+                    subtitle: const Text(
+                      'Save streamed songs to device for offline play',
+                      style: TextStyle(color: Colors.grey, fontSize: 11),
+                    ),
+                    value: _downloadWebMusic,
+                    activeThumbColor: PigTheme.hotPink,
+                    onChanged: (val) async {
+                      setState(() => _downloadWebMusic = val);
+                      await _settings.setDownloadWebMusic(val);
+                    },
+                  ),
+                  SwitchListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text(
+                      'Only Download on WiFi',
+                      style: TextStyle(color: Colors.white, fontSize: 14),
+                    ),
+                    subtitle: const Text(
+                      'Prevent downloads over mobile data',
+                      style: TextStyle(color: Colors.grey, fontSize: 11),
+                    ),
+                    value: _onlyDownloadOnWifi,
+                    activeThumbColor: PigTheme.hotPink,
+                    onChanged: (val) async {
+                      setState(() => _onlyDownloadOnWifi = val);
+                      await _settings.setOnlyDownloadOnWifi(val);
+                    },
+                  ),
                 ],
               ),
             ),
@@ -589,11 +905,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('About',
-                      style: TextStyle(
-                          color: PigTheme.goldenrod,
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold)),
+                  const Text(
+                    'About',
+                    style: TextStyle(
+                      color: PigTheme.goldenrod,
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
                   const SizedBox(height: 8),
                   const Text(
                     'PIG Mobile is the Android/iOS companion to PIGv4. '
@@ -617,9 +936,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(label, style: const TextStyle(color: PigTheme.cyan, fontSize: 14)),
-          Text(value,
-              style: const TextStyle(color: PigTheme.hotPink, fontSize: 14)),
+          Text(
+            label,
+            style: const TextStyle(color: PigTheme.cyan, fontSize: 14),
+          ),
+          Text(
+            value,
+            style: const TextStyle(color: PigTheme.hotPink, fontSize: 14),
+          ),
         ],
       ),
     );
