@@ -153,6 +153,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _scanStatus = result.toString();
         _scanning = false;
       });
+      await db.autoBackup();
       _loadStats();
     } catch (e) {
       setState(() {
@@ -243,6 +244,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _scanStatus = 'Tags updated for $updated of ${allSongs.length} songs.';
       _scanning = false;
     });
+    await db.autoBackup();
   }
 
   /// Delete all playlists and re-import from .m3u files.
@@ -765,7 +767,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   TextField(
                     controller: _webUrlController,
                     decoration: const InputDecoration(
-                      hintText: 'https://piggy.dirtsailor.org',
+                      hintText: 'https://my.pig.server',
                       labelText: 'PIG Web URL',
                       prefixIcon: Icon(Icons.link, color: PigTheme.goldenrod),
                       isDense: true,

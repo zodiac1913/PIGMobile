@@ -19,9 +19,14 @@ class PigWebService {
   String? get username => _username;
 
   void configure(String baseUrl) {
-    _baseUrl = baseUrl.endsWith('/')
-        ? baseUrl.substring(0, baseUrl.length - 1)
-        : baseUrl;
+    var normalized = baseUrl.trim();
+    if (normalized.endsWith('/')) {
+      normalized = normalized.substring(0, normalized.length - 1);
+    }
+    if (!normalized.startsWith(RegExp(r'https?://'))) {
+      normalized = 'https://$normalized';
+    }
+    _baseUrl = normalized;
   }
 
   /// Login and get a bearer token.

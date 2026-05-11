@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import 'package:just_audio/just_audio.dart';
 import '../services/audio_service.dart';
 import '../services/database_service.dart';
+import '../services/browse_state.dart';
 import '../theme.dart';
 
 /// Player tab — transport, seek, volume, upcoming songs, song info modal.
@@ -30,26 +31,76 @@ class _PlayerScreenState extends State<PlayerScreen> {
     context.read<AudioService>().setKeepScreenOn(_keepScreenOn);
   }
 
-  /// If user hits play with nothing queued, play entire library shuffled.
+  /// Play button logic:
+  /// 1. If already playing, toggle pause/play
+  /// 2. If Browse has a queue, play that
+  /// 3. If no Browse queue, play all local songs shuffled
+  /// 4. If no music at all, show message
   Future<void> _handlePlay() async {
     final audio = context.read<AudioService>();
-    // If something is playing, toggle pause/play
+
+    // Already playing — toggle pause/play
     if (audio.currentSong != null) {
       audio.toggle();
       return;
     }
-    // If playlist has songs (set from Browse), start playing
+
+    // Already have a playlist loaded (from a previous play) — resume
     if (audio.playlist.isNotEmpty) {
-      audio.toggle(); // This will play index 0
+      audio.toggle();
       return;
     }
-    // Nothing ever selected — play everything shuffled
+
+    // Check if Browse has built a queue
+    final browseState = context.read<BrowseState>();
+    if (browseState.hasQueue) {
+      // Set up web service if streaming
+      if (browseState.isWeb && browseState.webService != null) {
+        audio.setPigWebService(browseState.webService);
+      }
+      audio.setPlaylist(browseState.queue, startIndex: 0);
+      return;
+    }
+
+    // No selections — play all local music shuffled
     final db = DatabaseService();
-    final allSongs = await db.getAllSongs();
-    if (allSongs.isEmpty || !mounted) return;
-    if (!audio.shuffle) audio.toggleShuffle();
-    if (audio.repeatMode == PigRepeatMode.off) audio.toggleRepeat();
-    audio.setPlaylist(allSongs, startIndex: 0);
+    final localCount = await db.getSongCount();
+    if (localCount > 0) {
+      final allSongs = await db.getAllSongs();
+      if (allSongs.isNotEmpty && mounted) {
+        if (!audio.shuffle) audio.toggleShuffle();
+        if (audio.repeatMode == PigRepeatMode.off) audio.toggleRepeat();
+        audio.setPlaylist(allSongs, startIndex: 0);
+        return;
+      }
+    }
+
+    // No local music — try web if authenticated
+    final browseState2 = context.read<BrowseState>();
+    if (browseState2.webService != null &&
+        browseState2.webService!.isAuthenticated) {
+      try {
+        final webSongs = await browseState2.webService!.browseSongs();
+        if (webSongs.isNotEmpty && mounted) {
+          audio.setPigWebService(browseState2.webService);
+          if (!audio.shuffle) audio.toggleShuffle();
+          if (audio.repeatMode == PigRepeatMode.off) audio.toggleRepeat();
+          audio.setPlaylist(webSongs, startIndex: 0);
+          return;
+        }
+      } catch (_) {}
+    }
+
+    // No music at all
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'No music available. Scan your music folder in Settings, or select music from the Browse tab.',
+        ),
+        duration: Duration(seconds: 4),
+      ),
+    );
   }
 
   void _showSongInfoModal(BuildContext context, AudioService audio) {

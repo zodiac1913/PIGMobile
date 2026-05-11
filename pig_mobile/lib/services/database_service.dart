@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -17,19 +18,76 @@ class DatabaseService {
   Future<Database> _initDb() async {
     final dir = await getApplicationDocumentsDirectory();
     final dbPath = p.join(dir.path, 'pig_mobile.db');
-    return await openDatabase(
+
+    // If the app DB doesn't exist, try to restore from the music folder backup
+    final dbFile = File(dbPath);
+    if (!await dbFile.exists()) {
+      await _restoreFromBackup(dbPath);
+    }
+
+    final db = await openDatabase(
       dbPath,
       version: 2,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
+    return db;
+  }
+
+  /// Backup the database to the music folder (survives app uninstall).
+  Future<void> backupToMusicFolder() async {
+    final dir = await getApplicationDocumentsDirectory();
+    final dbPath = p.join(dir.path, 'pig_mobile.db');
+    final dbFile = File(dbPath);
+    if (!await dbFile.exists()) return;
+
+    // Close the database to ensure clean copy
+    if (_db != null) {
+      await _db!.close();
+      _db = null;
+    }
+
+    const backupDir = '/storage/emulated/0/Music/.pig';
+    final pigDir = Directory(backupDir);
+    if (!await pigDir.exists()) {
+      await pigDir.create(recursive: true);
+    }
+
+    final backupPath = p.join(backupDir, 'pig_mobile.db');
+    await dbFile.copy(backupPath);
+
+    // Reopen the database
+    _db = await _initDb();
+  }
+
+  /// Restore database from the music folder backup.
+  Future<void> _restoreFromBackup(String targetPath) async {
+    const backupPath = '/storage/emulated/0/Music/.pig/pig_mobile.db';
+    final backupFile = File(backupPath);
+    if (await backupFile.exists()) {
+      try {
+        await backupFile.copy(targetPath);
+      } catch (_) {
+        // If restore fails, we'll just start fresh
+      }
+    }
+  }
+
+  /// Auto-backup after significant operations (called after scan, rescan tags, etc).
+  Future<void> autoBackup() async {
+    try {
+      await backupToMusicFolder();
+    } catch (_) {
+      // Non-critical — don't crash if backup fails
+    }
   }
 
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
     if (oldVersion < 2) {
       await db.execute('ALTER TABLE songs ADD COLUMN albumArt BLOB');
       await db.execute(
-          'ALTER TABLE songs ADD COLUMN albumArtChecked INTEGER DEFAULT 0');
+        'ALTER TABLE songs ADD COLUMN albumArtChecked INTEGER DEFAULT 0',
+      );
     }
   }
 
@@ -73,39 +131,45 @@ class DatabaseService {
       )
     ''');
 
+    await db.execute('CREATE INDEX idx_songs_artist ON songs(artist)');
+    await db.execute('CREATE INDEX idx_songs_genre ON songs(genre)');
+    await db.execute('CREATE INDEX idx_songs_folder ON songs(sourceFolder)');
     await db.execute(
-        'CREATE INDEX idx_songs_artist ON songs(artist)');
-    await db.execute(
-        'CREATE INDEX idx_songs_genre ON songs(genre)');
-    await db.execute(
-        'CREATE INDEX idx_songs_folder ON songs(sourceFolder)');
-    await db.execute(
-        'CREATE INDEX idx_filters_playlist ON song_filters(playlistId)');
-    await db.execute(
-        'CREATE INDEX idx_filters_song ON song_filters(songId)');
+      'CREATE INDEX idx_filters_playlist ON song_filters(playlistId)',
+    );
+    await db.execute('CREATE INDEX idx_filters_song ON song_filters(songId)');
   }
 
   // ── Songs ──
 
   Future<int> insertSong(Song song) async {
     final db = await database;
-    return await db.insert('songs', song.toMap()..remove('id'),
-        conflictAlgorithm: ConflictAlgorithm.ignore);
+    return await db.insert(
+      'songs',
+      song.toMap()..remove('id'),
+      conflictAlgorithm: ConflictAlgorithm.ignore,
+    );
   }
 
   Future<void> updateSong(Song song) async {
     final db = await database;
-    await db.update('songs', song.toMap(),
-        where: 'id = ?', whereArgs: [song.id]);
+    await db.update(
+      'songs',
+      song.toMap(),
+      where: 'id = ?',
+      whereArgs: [song.id],
+    );
   }
 
   /// Get album art bytes for a song. Returns null if not cached.
   Future<List<int>?> getAlbumArt(int songId) async {
     final db = await database;
-    final rows = await db.query('songs',
-        columns: ['albumArt', 'albumArtChecked'],
-        where: 'id = ?',
-        whereArgs: [songId]);
+    final rows = await db.query(
+      'songs',
+      columns: ['albumArt', 'albumArtChecked'],
+      where: 'id = ?',
+      whereArgs: [songId],
+    );
     if (rows.isEmpty) return null;
     return rows.first['albumArt'] as List<int>?;
   }
@@ -124,10 +188,12 @@ class DatabaseService {
   /// Check if album art has been looked up already.
   Future<bool> isAlbumArtChecked(int songId) async {
     final db = await database;
-    final rows = await db.query('songs',
-        columns: ['albumArtChecked'],
-        where: 'id = ?',
-        whereArgs: [songId]);
+    final rows = await db.query(
+      'songs',
+      columns: ['albumArtChecked'],
+      where: 'id = ?',
+      whereArgs: [songId],
+    );
     if (rows.isEmpty) return false;
     return (rows.first['albumArtChecked'] as int?) == 1;
   }
@@ -135,12 +201,15 @@ class DatabaseService {
   /// Get playlists that contain a specific song.
   Future<List<String>> getPlaylistNamesForSong(int songId) async {
     final db = await database;
-    final rows = await db.rawQuery('''
+    final rows = await db.rawQuery(
+      '''
       SELECT DISTINCT p.title FROM playlists p
       INNER JOIN song_filters sf ON sf.playlistId = p.id
       WHERE sf.songId = ?
       ORDER BY p.title
-    ''', [songId]);
+    ''',
+      [songId],
+    );
     return rows.map((r) => r['title'] as String).toList();
   }
 
@@ -152,8 +221,11 @@ class DatabaseService {
 
   Future<Song?> getSongByPath(String filePath) async {
     final db = await database;
-    final rows =
-        await db.query('songs', where: 'filePath = ?', whereArgs: [filePath]);
+    final rows = await db.query(
+      'songs',
+      where: 'filePath = ?',
+      whereArgs: [filePath],
+    );
     if (rows.isEmpty) return null;
     return Song.fromMap(rows.first);
   }
@@ -192,7 +264,8 @@ class DatabaseService {
       args.add('$startsWith%');
     } else if (search != null && search.isNotEmpty) {
       where.add(
-          '(title LIKE ? OR artist LIKE ? OR album LIKE ? OR filePath LIKE ?)');
+        '(title LIKE ? OR artist LIKE ? OR album LIKE ? OR filePath LIKE ?)',
+      );
       final term = '%$search%';
       args.addAll([term, term, term, term]);
     }
@@ -217,8 +290,7 @@ class DatabaseService {
       args.add(folder);
     }
     if (search != null && search.isNotEmpty) {
-      where.add(
-          '(title LIKE ? OR artist LIKE ? OR album LIKE ?)');
+      where.add('(title LIKE ? OR artist LIKE ? OR album LIKE ?)');
       final term = '%$search%';
       args.addAll([term, term, term]);
     }
@@ -234,28 +306,32 @@ class DatabaseService {
   Future<List<String>> getDistinctFolders() async {
     final db = await database;
     final rows = await db.rawQuery(
-        'SELECT DISTINCT sourceFolder FROM songs WHERE sourceFolder IS NOT NULL ORDER BY sourceFolder');
+      'SELECT DISTINCT sourceFolder FROM songs WHERE sourceFolder IS NOT NULL ORDER BY sourceFolder',
+    );
     return rows.map((r) => r['sourceFolder'] as String).toList();
   }
 
   Future<List<String>> getDistinctGenres() async {
     final db = await database;
     final rows = await db.rawQuery(
-        'SELECT DISTINCT genre FROM songs WHERE genre IS NOT NULL ORDER BY genre');
+      'SELECT DISTINCT genre FROM songs WHERE genre IS NOT NULL ORDER BY genre',
+    );
     return rows.map((r) => r['genre'] as String).toList();
   }
 
   Future<List<String>> getDistinctArtists() async {
     final db = await database;
     final rows = await db.rawQuery(
-        'SELECT DISTINCT artist FROM songs WHERE artist IS NOT NULL ORDER BY artist COLLATE NOCASE');
+      'SELECT DISTINCT artist FROM songs WHERE artist IS NOT NULL ORDER BY artist COLLATE NOCASE',
+    );
     return rows.map((r) => r['artist'] as String).toList();
   }
 
   // ── Artists with counts ──
 
-  Future<List<Map<String, dynamic>>> getArtistsWithCounts(
-      {String? search}) async {
+  Future<List<Map<String, dynamic>>> getArtistsWithCounts({
+    String? search,
+  }) async {
     final db = await database;
     String sql =
         'SELECT artist, COUNT(*) as songCount FROM songs WHERE artist IS NOT NULL';
@@ -277,8 +353,12 @@ class DatabaseService {
 
   Future<void> updatePlaylist(Playlist playlist) async {
     final db = await database;
-    await db.update('playlists', playlist.toMap(),
-        where: 'id = ?', whereArgs: [playlist.id]);
+    await db.update(
+      'playlists',
+      playlist.toMap(),
+      where: 'id = ?',
+      whereArgs: [playlist.id],
+    );
   }
 
   Future<void> deletePlaylist(int id) async {
@@ -298,9 +378,11 @@ class DatabaseService {
   Future<void> setSongFilter(SongFilter filter) async {
     final db = await database;
     // Remove existing filter for this song+playlist combo
-    await db.delete('song_filters',
-        where: 'playlistId = ? AND songId = ?',
-        whereArgs: [filter.playlistId, filter.songId]);
+    await db.delete(
+      'song_filters',
+      where: 'playlistId = ? AND songId = ?',
+      whereArgs: [filter.playlistId, filter.songId],
+    );
     if (filter.hasTitle || filter.hasArtist) {
       await db.insert('song_filters', filter.toMap()..remove('id'));
     }
@@ -308,15 +390,21 @@ class DatabaseService {
 
   Future<List<SongFilter>> getFiltersForSong(int songId) async {
     final db = await database;
-    final rows = await db
-        .query('song_filters', where: 'songId = ?', whereArgs: [songId]);
+    final rows = await db.query(
+      'song_filters',
+      where: 'songId = ?',
+      whereArgs: [songId],
+    );
     return rows.map((r) => SongFilter.fromMap(r)).toList();
   }
 
   Future<List<SongFilter>> getFiltersForPlaylist(int playlistId) async {
     final db = await database;
-    final rows = await db.query('song_filters',
-        where: 'playlistId = ?', whereArgs: [playlistId]);
+    final rows = await db.query(
+      'song_filters',
+      where: 'playlistId = ?',
+      whereArgs: [playlistId],
+    );
     return rows.map((r) => SongFilter.fromMap(r)).toList();
   }
 
@@ -324,7 +412,8 @@ class DatabaseService {
   /// HasTitle = that specific song. HasArtist = ALL songs by that artist.
   Future<List<Song>> resolvePlaylistSongs(int playlistId) async {
     final db = await database;
-    final rows = await db.rawQuery('''
+    final rows = await db.rawQuery(
+      '''
       SELECT DISTINCT s.* FROM songs s
       WHERE s.id IN (
         SELECT sf.songId FROM song_filters sf
@@ -339,7 +428,9 @@ class DatabaseService {
         AND s3.artist IS NOT NULL
       )
       ORDER BY artist COLLATE NOCASE, title COLLATE NOCASE
-    ''', [playlistId, playlistId]);
+    ''',
+      [playlistId, playlistId],
+    );
     return rows.map((r) => Song.fromMap(r)).toList();
   }
 
@@ -347,7 +438,8 @@ class DatabaseService {
   Future<Map<int, int>> getPlaylistSongCounts() async {
     final db = await database;
     final rows = await db.rawQuery(
-        'SELECT playlistId, COUNT(*) as cnt FROM song_filters GROUP BY playlistId');
+      'SELECT playlistId, COUNT(*) as cnt FROM song_filters GROUP BY playlistId',
+    );
     final map = <int, int>{};
     for (final r in rows) {
       map[r['playlistId'] as int] = r['cnt'] as int;
@@ -374,29 +466,34 @@ class DatabaseService {
         if (resolved.isNotEmpty) {
           final ids = resolved.map((s) => s.id).toList();
           parts.add(
-              'SELECT * FROM songs WHERE id IN (${ids.map((_) => '?').join(',')})');
+            'SELECT * FROM songs WHERE id IN (${ids.map((_) => '?').join(',')})',
+          );
           args.addAll(ids);
         }
       }
     }
     if (folders != null && folders.isNotEmpty) {
       parts.add(
-          'SELECT * FROM songs WHERE sourceFolder IN (${folders.map((_) => '?').join(',')})');
+        'SELECT * FROM songs WHERE sourceFolder IN (${folders.map((_) => '?').join(',')})',
+      );
       args.addAll(folders);
     }
     if (genres != null && genres.isNotEmpty) {
       parts.add(
-          'SELECT * FROM songs WHERE genre IN (${genres.map((_) => '?').join(',')})');
+        'SELECT * FROM songs WHERE genre IN (${genres.map((_) => '?').join(',')})',
+      );
       args.addAll(genres);
     }
     if (artists != null && artists.isNotEmpty) {
       parts.add(
-          'SELECT * FROM songs WHERE artist IN (${artists.map((_) => '?').join(',')})');
+        'SELECT * FROM songs WHERE artist IN (${artists.map((_) => '?').join(',')})',
+      );
       args.addAll(artists);
     }
     if (pickedSongIds != null && pickedSongIds.isNotEmpty) {
       parts.add(
-          'SELECT * FROM songs WHERE id IN (${pickedSongIds.map((_) => '?').join(',')})');
+        'SELECT * FROM songs WHERE id IN (${pickedSongIds.map((_) => '?').join(',')})',
+      );
       args.addAll(pickedSongIds);
     }
 

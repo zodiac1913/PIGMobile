@@ -5,6 +5,7 @@ import '../services/audio_service.dart';
 import '../services/database_service.dart';
 import '../services/pig_web_service.dart';
 import '../services/settings_service.dart';
+import '../services/browse_state.dart';
 import '../models/playlist.dart';
 import '../theme.dart';
 
@@ -23,21 +24,47 @@ class _BrowseScreenState extends State<BrowseScreen>
   bool _useWeb = false;
   final PigWebService _webService = PigWebService();
 
-  // Filter data
+  // Filter data (current view)
   List<Playlist> _playlists = [];
   List<String> _folders = [];
   List<String> _genres = [];
   List<String> _artists = [];
 
-  // Selected filters
-  final Set<int> _selectedPlaylists = {};
-  final Set<String> _selectedFolders = {};
-  final Set<String> _selectedGenres = {};
-  final Set<String> _selectedArtists = {};
-  final Set<int> _pickedSongIds = {};
+  // LOCAL selections (preserved when switching)
+  final Set<int> _localSelectedPlaylists = {};
+  final Set<String> _localSelectedFolders = {};
+  final Set<String> _localSelectedGenres = {};
+  final Set<String> _localSelectedArtists = {};
+  final Set<int> _localPickedSongIds = {};
+  List<Song> _localSongs = [];
 
-  // Results
-  List<Song> _songs = [];
+  // WEB selections (preserved when switching)
+  final Set<int> _webSelectedPlaylists = {};
+  final Set<String> _webSelectedFolders = {};
+  final Set<String> _webSelectedGenres = {};
+  final Set<String> _webSelectedArtists = {};
+  List<Song> _webSongs = [];
+
+  // Active references (point to local or web sets)
+  Set<int> get _selectedPlaylists =>
+      _useWeb ? _webSelectedPlaylists : _localSelectedPlaylists;
+  Set<String> get _selectedFolders =>
+      _useWeb ? _webSelectedFolders : _localSelectedFolders;
+  Set<String> get _selectedGenres =>
+      _useWeb ? _webSelectedGenres : _localSelectedGenres;
+  Set<String> get _selectedArtists =>
+      _useWeb ? _webSelectedArtists : _localSelectedArtists;
+  Set<int> get _pickedSongIds => _localPickedSongIds; // Only local has picks
+
+  List<Song> get _songs => _useWeb ? _webSongs : _localSongs;
+  set _songs(List<Song> val) {
+    if (_useWeb) {
+      _webSongs = val;
+    } else {
+      _localSongs = val;
+    }
+  }
+
   bool _loading = false;
   bool _filtersLoaded = false;
 
@@ -135,6 +162,15 @@ class _BrowseScreenState extends State<BrowseScreen>
       debugPrint('Browse failed: $e');
     }
     setState(() => _loading = false);
+
+    // Push queue to shared state so Player can access it
+    if (mounted) {
+      context.read<BrowseState>().setQueue(
+        _songs,
+        isWeb: _useWeb,
+        webService: _useWeb ? _webService : null,
+      );
+    }
   }
 
   bool _hasAnyFilter() =>
@@ -150,28 +186,16 @@ class _BrowseScreenState extends State<BrowseScreen>
       _selectedFolders.clear();
       _selectedGenres.clear();
       _selectedArtists.clear();
-      _pickedSongIds.clear();
-      _songs.clear();
+      if (!_useWeb) _pickedSongIds.clear();
+      _songs = [];
     });
+    context.read<BrowseState>().clear();
   }
 
-  void _playQueue() {
-    final audio = context.read<AudioService>();
-    if (_useWeb) {
-      audio.setPigWebService(_webService);
-    }
-    if (_songs.isNotEmpty) {
-      audio.setPlaylist(_songs, startIndex: 0);
-    }
-  }
-
-  void _playSong(int index) {
-    final audio = context.read<AudioService>();
-    if (_useWeb) {
-      audio.setPigWebService(_webService);
-    }
-    audio.setPlaylist(_songs, startIndex: index);
-  }
+  /// Get the current browse queue (used by Player to know what's selected).
+  List<Song> get currentQueue => _songs;
+  bool get isWebMode => _useWeb;
+  PigWebService get webService => _webService;
 
   @override
   Widget build(BuildContext context) {
@@ -183,6 +207,131 @@ class _BrowseScreenState extends State<BrowseScreen>
 
     return Column(
       children: [
+        // Header: Pig logo + Web/Local toggle
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          color: PigTheme.navy,
+          child: Column(
+            children: [
+              // Pig icon + title row
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Image.asset(
+                    'assets/pigIconsnout.png',
+                    width: 28,
+                    height: 28,
+                    errorBuilder: (_, e, s) => const Icon(
+                      Icons.music_note,
+                      size: 28,
+                      color: PigTheme.hotPink,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  const Text(
+                    'PIG',
+                    style: TextStyle(
+                      color: PigTheme.hotPink,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              // Web / Local toggle buttons — full width
+              Row(
+                children: [
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: () {
+                        if (_useWeb) {
+                          setState(() => _useWeb = false);
+                          _loadFilters();
+                        }
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        decoration: BoxDecoration(
+                          color: !_useWeb ? PigTheme.maroon : PigTheme.darkNavy,
+                          borderRadius: const BorderRadius.horizontal(
+                            left: Radius.circular(8),
+                          ),
+                          border: Border.all(
+                            color: !_useWeb
+                                ? PigTheme.hotPink
+                                : Colors.grey.shade700,
+                          ),
+                        ),
+                        child: Center(
+                          child: Text(
+                            '📱 Local',
+                            style: TextStyle(
+                              color: !_useWeb ? PigTheme.hotPink : Colors.grey,
+                              fontSize: 14,
+                              fontWeight: !_useWeb
+                                  ? FontWeight.bold
+                                  : FontWeight.normal,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: () {
+                        if (!_useWeb) {
+                          if (!_webService.isAuthenticated) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                  'Login to PIG Web in Settings first',
+                                ),
+                              ),
+                            );
+                            return;
+                          }
+                          setState(() {
+                            _useWeb = true;
+                          });
+                          _loadFilters();
+                        }
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        decoration: BoxDecoration(
+                          color: _useWeb ? PigTheme.maroon : PigTheme.darkNavy,
+                          borderRadius: const BorderRadius.horizontal(
+                            right: Radius.circular(8),
+                          ),
+                          border: Border.all(
+                            color: _useWeb
+                                ? PigTheme.hotPink
+                                : Colors.grey.shade700,
+                          ),
+                        ),
+                        child: Center(
+                          child: Text(
+                            '🌐 Web',
+                            style: TextStyle(
+                              color: _useWeb ? PigTheme.hotPink : Colors.grey,
+                              fontSize: 14,
+                              fontWeight: _useWeb
+                                  ? FontWeight.bold
+                                  : FontWeight.normal,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+
         // Music Selection panel header
         _panelHeader(
           title: 'Music Selection',
@@ -192,55 +341,20 @@ class _BrowseScreenState extends State<BrowseScreen>
               ? '${_selectedPlaylists.length + _selectedFolders.length + _selectedGenres.length + _selectedArtists.length + (_pickedSongIds.isNotEmpty ? 1 : 0)}'
               : null,
           onTap: () => setState(() => _selectionOpen = !_selectionOpen),
-          trailing: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // Local/Web toggle
-              if (_webService.isAuthenticated)
-                GestureDetector(
-                  onTap: () {
-                    setState(() {
-                      _useWeb = !_useWeb;
-                      _clearAll();
-                    });
-                    _loadFilters();
-                  },
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 3,
-                    ),
-                    decoration: BoxDecoration(
-                      color: _useWeb
-                          ? PigTheme.hotPink.withAlpha(40)
-                          : PigTheme.navy,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(
-                        color: _useWeb ? PigTheme.hotPink : Colors.grey,
-                      ),
-                    ),
-                    child: Text(
-                      _useWeb ? '🌐 Web' : '📱 Local',
-                      style: TextStyle(
-                        color: _useWeb ? PigTheme.hotPink : Colors.grey,
-                        fontSize: 11,
-                      ),
-                    ),
-                  ),
-                ),
-              if (_hasAnyFilter()) ...[
-                const SizedBox(width: 6),
-                IconButton(
-                  icon: const Icon(Icons.clear_all, size: 20),
-                  color: Colors.grey,
-                  tooltip: 'Clear all selections',
+          trailing: _hasAnyFilter()
+              ? TextButton(
                   onPressed: _clearAll,
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(),
-                ),
-              ],
-            ],
-          ),
+                  style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  child: const Text(
+                    'Clear',
+                    style: TextStyle(color: Colors.grey, fontSize: 12),
+                  ),
+                )
+              : null,
         ),
         // Music Selection content
         if (_selectionOpen)
@@ -296,16 +410,7 @@ class _BrowseScreenState extends State<BrowseScreen>
           isOpen: _queueOpen,
           badge: _songs.isNotEmpty ? '${_songs.length}' : null,
           onTap: () => setState(() => _queueOpen = !_queueOpen),
-          trailing: _songs.isNotEmpty
-              ? IconButton(
-                  icon: const Icon(Icons.play_arrow, size: 22),
-                  color: PigTheme.hotPink,
-                  tooltip: 'Play queue',
-                  onPressed: _playQueue,
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(),
-                )
-              : null,
+          trailing: null,
         ),
         // Queue content
         if (_queueOpen)
@@ -347,7 +452,7 @@ class _BrowseScreenState extends State<BrowseScreen>
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                           ),
-                          onTap: () => _playSong(index),
+                          onTap: null,
                         ),
                       );
                     },

@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:audio_service/audio_service.dart' as as_pkg;
 import 'package:audio_metadata_reader/audio_metadata_reader.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import '../models/song.dart';
 import 'database_service.dart';
@@ -26,6 +27,7 @@ class PigAudioHandler extends as_pkg.BaseAudioHandler with as_pkg.SeekHandler {
   PigRepeatMode _repeatMode = PigRepeatMode.off;
   Song? _currentSong;
   Uint8List? _currentAlbumArt;
+  Uri? _artUri;
   List<String> _currentPlaylists = [];
   bool _keepScreenOn = false;
 
@@ -115,6 +117,12 @@ class PigAudioHandler extends as_pkg.BaseAudioHandler with as_pkg.SeekHandler {
         album: song.displayAlbum,
         duration: _player.duration,
         genre: song.genre,
+        artUri: _artUri,
+        displayTitle: song.displayTitle,
+        displaySubtitle: song.displayArtist,
+        displayDescription: song.displayAlbum,
+        rating: null,
+        extras: null,
       ),
     );
   }
@@ -141,6 +149,13 @@ class PigAudioHandler extends as_pkg.BaseAudioHandler with as_pkg.SeekHandler {
               artist: s.displayArtist,
               album: s.displayAlbum,
               genre: s.genre,
+              artUri: null,
+              displayTitle: s.displayTitle,
+              displaySubtitle: s.displayArtist,
+              displayDescription: s.displayAlbum,
+              duration: null,
+              rating: null,
+              extras: null,
             ),
           )
           .toList(),
@@ -156,7 +171,7 @@ class PigAudioHandler extends as_pkg.BaseAudioHandler with as_pkg.SeekHandler {
     _currentIndex = index;
     final song = _playlist[index];
     _currentSong = song;
-    _currentAlbumArt = null;
+    await _setAlbumArt(null);
     _currentPlaylists = [];
     onStateChanged?.call();
 
@@ -187,7 +202,7 @@ class PigAudioHandler extends as_pkg.BaseAudioHandler with as_pkg.SeekHandler {
 
     final cached = await db.getAlbumArt(song.id!);
     if (cached != null) {
-      _currentAlbumArt = Uint8List.fromList(cached);
+      await _setAlbumArt(Uint8List.fromList(cached));
       _broadcastMediaItem();
       onStateChanged?.call();
       return;
@@ -205,7 +220,7 @@ class PigAudioHandler extends as_pkg.BaseAudioHandler with as_pkg.SeekHandler {
         final metadata = readMetadata(file, getImage: true);
         if (metadata.pictures.isNotEmpty) {
           final artBytes = metadata.pictures.first.bytes;
-          _currentAlbumArt = Uint8List.fromList(artBytes);
+          await _setAlbumArt(Uint8List.fromList(artBytes));
           await db.setAlbumArt(song.id!, artBytes);
           _broadcastMediaItem();
           onStateChanged?.call();
@@ -219,7 +234,7 @@ class PigAudioHandler extends as_pkg.BaseAudioHandler with as_pkg.SeekHandler {
       try {
         final artBytes = await _fetchCoverArtArchive(song.artist!, song.album);
         if (artBytes != null) {
-          _currentAlbumArt = Uint8List.fromList(artBytes);
+          await _setAlbumArt(Uint8List.fromList(artBytes));
           await db.setAlbumArt(song.id!, artBytes);
           _broadcastMediaItem();
           onStateChanged?.call();
@@ -235,7 +250,7 @@ class PigAudioHandler extends as_pkg.BaseAudioHandler with as_pkg.SeekHandler {
           _currentSong!.artist!,
         );
         if (artBytes != null) {
-          _currentAlbumArt = Uint8List.fromList(artBytes);
+          await _setAlbumArt(Uint8List.fromList(artBytes));
           await db.setAlbumArt(song.id!, artBytes);
           _broadcastMediaItem();
           onStateChanged?.call();
@@ -246,6 +261,18 @@ class PigAudioHandler extends as_pkg.BaseAudioHandler with as_pkg.SeekHandler {
 
     await db.setAlbumArt(song.id!, null);
     onStateChanged?.call();
+  }
+
+  Future<void> _setAlbumArt(Uint8List? bytes) async {
+    _currentAlbumArt = bytes;
+    if (bytes != null) {
+      final tempDir = await getTemporaryDirectory();
+      final artFile = File('${tempDir.path}/album_art.jpg');
+      await artFile.writeAsBytes(bytes);
+      _artUri = Uri.file(artFile.path);
+    } else {
+      _artUri = null;
+    }
   }
 
   /// Fetch artist image from Wikipedia API.
@@ -568,6 +595,7 @@ class AudioService extends ChangeNotifier {
   int _pendingStartIndex = 0;
   bool _pendingAutoPlay = true;
 
+
   bool get initialized => _initialized;
   List<Song> get playlist => _initialized ? _handler.playlist : [];
   int get currentIndex => _initialized ? _handler.currentIndex : -1;
@@ -597,17 +625,12 @@ class AudioService extends ChangeNotifier {
     try {
       final handler = await as_pkg.AudioService.init(
         builder: () => PigAudioHandler(),
-        config: const as_pkg.AudioServiceConfig(
-          androidNotificationChannelId: 'com.pig.pig_mobile.audio',
-          androidNotificationChannelName: 'PIG Music',
-          androidNotificationOngoing: true,
-          androidStopForegroundOnPause: true,
-          androidNotificationIcon: 'mipmap/ic_launcher',
-        ),
       );
       _handler = handler as PigAudioHandler;
+      debugPrint('AudioService: media session initialized OK');
     } catch (e) {
-      debugPrint('AudioService.init failed: $e — using direct handler');
+      debugPrint('AudioService.init FAILED: $e');
+      debugPrint('Bluetooth/Auto/lock screen controls will NOT work');
       _handler = PigAudioHandler();
     }
 
