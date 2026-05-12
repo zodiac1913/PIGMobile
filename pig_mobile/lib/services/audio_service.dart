@@ -589,7 +589,7 @@ class PigAudioHandler extends as_pkg.BaseAudioHandler with as_pkg.SeekHandler {
 
 /// ChangeNotifier wrapper for Provider — bridges PigAudioHandler with Flutter widgets.
 class AudioService extends ChangeNotifier {
-  late final PigAudioHandler _handler;
+  late PigAudioHandler _handler;
   bool _initialized = false;
   List<Song>? _pendingPlaylist;
   int _pendingStartIndex = 0;
@@ -618,23 +618,27 @@ class AudioService extends ChangeNotifier {
   bool get keepScreenOn => _initialized ? _handler.keepScreenOn : false;
 
   AudioService() {
-    _init();
+    _handler = PigAudioHandler();
+    _handler.onStateChanged = () => notifyListeners();
   }
 
-  Future<void> _init() async {
+  /// Called from main() AFTER runApp — fixes splash hang on some Android versions.
+  Future<void> initMediaSession() async {
     try {
-      final handler = await as_pkg.AudioService.init(
-        builder: () => PigAudioHandler(),
+      await as_pkg.AudioService.init(
+        builder: () => _handler,
+        config: const as_pkg.AudioServiceConfig(
+          androidNotificationChannelId: 'com.pig.pig_mobile.audio',
+          androidNotificationChannelName: 'PIG Music',
+          androidNotificationOngoing: true,
+          androidStopForegroundOnPause: true,
+        ),
       );
-      _handler = handler as PigAudioHandler;
       debugPrint('AudioService: media session initialized OK');
     } catch (e) {
       debugPrint('AudioService.init FAILED: $e');
-      debugPrint('Bluetooth/Auto/lock screen controls will NOT work');
-      _handler = PigAudioHandler();
     }
 
-    _handler.onStateChanged = () => notifyListeners();
     _initialized = true;
 
     if (_pendingPlaylist != null) {

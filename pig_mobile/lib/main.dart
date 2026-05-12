@@ -8,17 +8,24 @@ import 'screens/settings_screen.dart';
 import 'screens/player_screen.dart';
 import 'widgets/mini_player.dart';
 
-void main() {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  final audioService = AudioService();
+
   runApp(
     MultiProvider(
       providers: [
-        ChangeNotifierProvider(create: (_) => AudioService()),
+        ChangeNotifierProvider.value(value: audioService),
         ChangeNotifierProvider(create: (_) => BrowseState()),
       ],
       child: const PigMobileApp(),
     ),
   );
+
+  // Init audio_service AFTER runApp — needed on some Android versions.
+  // Happens before any user interaction so Bluetooth/Auto/CarPlay still work.
+  await audioService.initMediaSession();
 }
 
 class PigMobileApp extends StatelessWidget {
