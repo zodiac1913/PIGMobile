@@ -109,6 +109,7 @@ class PigAudioHandler extends as_pkg.BaseAudioHandler with as_pkg.SeekHandler {
   void _broadcastMediaItem() {
     if (_currentSong == null) return;
     final song = _currentSong!;
+    debugPrint('PIG: broadcastMediaItem title=${song.displayTitle} artist=${song.displayArtist} artUri=$_artUri');
     mediaItem.add(
       as_pkg.MediaItem(
         id: song.filePath,
@@ -171,6 +172,7 @@ class PigAudioHandler extends as_pkg.BaseAudioHandler with as_pkg.SeekHandler {
     _currentIndex = index;
     final song = _playlist[index];
     _currentSong = song;
+    debugPrint('PIG: playing index=$index title=${song.displayTitle}');
     await _setAlbumArt(null);
     _currentPlaylists = [];
     onStateChanged?.call();
@@ -625,7 +627,7 @@ class AudioService extends ChangeNotifier {
   /// Called from main() AFTER runApp — fixes splash hang on some Android versions.
   Future<void> initMediaSession() async {
     try {
-      await as_pkg.AudioService.init(
+      final registeredHandler = await as_pkg.AudioService.init(
         builder: () => _handler,
         config: const as_pkg.AudioServiceConfig(
           androidNotificationChannelId: 'com.pig.pig_mobile.audio',
@@ -634,9 +636,12 @@ class AudioService extends ChangeNotifier {
           androidStopForegroundOnPause: true,
         ),
       );
-      debugPrint('AudioService: media session initialized OK');
+      // MUST use the returned handler — it's the one connected to the media session.
+      _handler = registeredHandler as PigAudioHandler;
+      _handler.onStateChanged = () => notifyListeners();
+      debugPrint('PIG: media session initialized OK, handler=$registeredHandler');
     } catch (e) {
-      debugPrint('AudioService.init FAILED: $e');
+      debugPrint('PIG: AudioService.init FAILED: $e');
     }
 
     _initialized = true;
