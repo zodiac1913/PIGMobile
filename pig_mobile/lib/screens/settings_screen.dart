@@ -210,14 +210,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
         // Only update if we got something new
         bool changed = false;
-        if (title != null && title.isNotEmpty && title != song.title)
+        if (title != null && title.isNotEmpty && title != song.title) {
           changed = true;
-        if (artist != null && artist.isNotEmpty && artist != song.artist)
+        }
+        if (artist != null && artist.isNotEmpty && artist != song.artist) {
           changed = true;
-        if (album != null && album.isNotEmpty && album != song.album)
+        }
+        if (album != null && album.isNotEmpty && album != song.album) {
           changed = true;
-        if (genre != null && genre.isNotEmpty && genre != song.genre)
+        }
+        if (genre != null && genre.isNotEmpty && genre != song.genre) {
           changed = true;
+        }
         if (year != null && year != song.year) changed = true;
         if (durationMs != null && durationMs != song.durationMs) changed = true;
 

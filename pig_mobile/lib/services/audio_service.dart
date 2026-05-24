@@ -109,7 +109,6 @@ class PigAudioHandler extends as_pkg.BaseAudioHandler with as_pkg.SeekHandler {
   void _broadcastMediaItem() {
     if (_currentSong == null) return;
     final song = _currentSong!;
-    debugPrint('PIG: broadcastMediaItem title=${song.displayTitle} artist=${song.displayArtist} artUri=$_artUri');
     mediaItem.add(
       as_pkg.MediaItem(
         id: song.filePath,
@@ -172,9 +171,11 @@ class PigAudioHandler extends as_pkg.BaseAudioHandler with as_pkg.SeekHandler {
     _currentIndex = index;
     final song = _playlist[index];
     _currentSong = song;
-    debugPrint('PIG: playing index=$index title=${song.displayTitle}');
     await _setAlbumArt(null);
     _currentPlaylists = [];
+    // Broadcast immediately so Android Auto gets title/artist right away
+    _broadcastMediaItem();
+    _broadcastState();
     onStateChanged?.call();
 
     try {
@@ -188,7 +189,6 @@ class PigAudioHandler extends as_pkg.BaseAudioHandler with as_pkg.SeekHandler {
         await _player.setFilePath(song.filePath);
       }
       _player.play();
-      _broadcastMediaItem();
       _loadSongExtras(song);
     } catch (e) {
       debugPrint('Error playing ${song.filePath}: $e');
@@ -197,7 +197,11 @@ class PigAudioHandler extends as_pkg.BaseAudioHandler with as_pkg.SeekHandler {
   }
 
   Future<void> _loadSongExtras(Song song) async {
-    if (song.id == null || song.filePath.startsWith('web://')) return;
+    if (song.id == null || song.filePath.startsWith('web://')) {
+      // Still broadcast for web songs so Android Auto gets title/artist
+      _broadcastMediaItem();
+      return;
+    }
     final db = DatabaseService();
 
     _currentPlaylists = await db.getPlaylistNamesForSong(song.id!);
@@ -591,12 +595,11 @@ class PigAudioHandler extends as_pkg.BaseAudioHandler with as_pkg.SeekHandler {
 
 /// ChangeNotifier wrapper for Provider — bridges PigAudioHandler with Flutter widgets.
 class AudioService extends ChangeNotifier {
-  late PigAudioHandler _handler;
+  late final PigAudioHandler _handler;
   bool _initialized = false;
   List<Song>? _pendingPlaylist;
   int _pendingStartIndex = 0;
   bool _pendingAutoPlay = true;
-
 
   bool get initialized => _initialized;
   List<Song> get playlist => _initialized ? _handler.playlist : [];
@@ -624,7 +627,6 @@ class AudioService extends ChangeNotifier {
     _handler.onStateChanged = () => notifyListeners();
   }
 
-  /// Called from main() AFTER runApp — fixes splash hang on some Android versions.
   Future<void> initMediaSession() async {
     try {
       final registeredHandler = await as_pkg.AudioService.init(
@@ -636,7 +638,6 @@ class AudioService extends ChangeNotifier {
           androidStopForegroundOnPause: true,
         ),
       );
-      // MUST use the returned handler — it's the one connected to the media session.
       _handler = registeredHandler as PigAudioHandler;
       _handler.onStateChanged = () => notifyListeners();
       debugPrint('PIG: media session initialized OK, handler=$registeredHandler');
