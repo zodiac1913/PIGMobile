@@ -216,9 +216,105 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final orientation = MediaQuery.of(context).orientation;
+    final isLandscape = orientation == Orientation.landscape;
+
     final content = Consumer<AudioService>(
       builder: (context, audio, _) {
         final song = audio.currentSong;
+
+        if (isLandscape) {
+          return Stack(
+            children: [
+              Positioned.fill(
+                child: Opacity(
+                  opacity: 0.10,
+                  child: Image.asset(
+                    'assets/PIGTranBG.png',
+                    fit: BoxFit.contain,
+                    errorBuilder: (_, e, s) => const SizedBox.shrink(),
+                  ),
+                ),
+              ),
+              SafeArea(
+                child: Row(
+                  children: [
+                    // Left: Controls (2 Rows)
+                    Expanded(
+                      flex: 4,
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          _TransportControls(
+                            audio: audio,
+                            onPlay: _handlePlay,
+                            isVertical: false,
+                          ),
+                          const SizedBox(height: 16),
+                          _ControlsRow(
+                            audio: audio,
+                            keepScreenOn: _keepScreenOn,
+                            onToggleKeepScreenOn: _toggleKeepScreenOn,
+                            isVertical: false,
+                          ),
+                        ],
+                      ),
+                    ),
+                    // Center: Art + Info
+                    Expanded(
+                      flex: 3,
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          GestureDetector(
+                            onTap: song != null
+                                ? () => _showSongInfoModal(context, audio)
+                                : null,
+                            child: _AlbumArt(
+                              albumArt: audio.currentAlbumArt,
+                              size: 160,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          if (song != null)
+                            Column(
+                              children: [
+                                Text(
+                                  song.displayTitle,
+                                  style: const TextStyle(
+                                    color: PigTheme.hotPink,
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                  textAlign: TextAlign.center,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                Text(
+                                  song.displayArtist,
+                                  style: const TextStyle(
+                                    color: Colors.grey,
+                                    fontSize: 12,
+                                  ),
+                                  textAlign: TextAlign.center,
+                                ),
+                              ],
+                            ),
+                          _SeekBar(audio: audio),
+                        ],
+                      ),
+                    ),
+                    // Right: Upcoming List
+                    Expanded(
+                      flex: 3,
+                      child: _UpcomingList(audio: audio, isVertical: true),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          );
+        }
 
         return Stack(
           children: [
@@ -261,7 +357,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                                     song.displayTitle,
                                     style: const TextStyle(
                                       color: PigTheme.hotPink,
-                                      fontSize: 18,
+                                      fontSize: 22,
                                       fontWeight: FontWeight.bold,
                                     ),
                                     textAlign: TextAlign.center,
@@ -274,7 +370,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                                       song.artist!,
                                       style: const TextStyle(
                                         color: Colors.grey,
-                                        fontSize: 14,
+                                        fontSize: 16,
                                       ),
                                       textAlign: TextAlign.center,
                                     ),
@@ -297,7 +393,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                           _SeekBar(audio: audio),
                           const SizedBox(height: 8),
                           // Transport
-                          _TransportRow(audio: audio, onPlay: _handlePlay),
+                          _TransportControls(audio: audio, onPlay: _handlePlay),
                           const SizedBox(height: 10),
                           // Shuffle / Repeat / Screen
                           _ControlsRow(
@@ -343,17 +439,18 @@ class _PlayerScreenState extends State<PlayerScreen> {
 /// Album art widget.
 class _AlbumArt extends StatelessWidget {
   final List<int>? albumArt;
-  const _AlbumArt({this.albumArt});
+  final double size;
+  const _AlbumArt({this.albumArt, this.size = 240});
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: 160,
-      height: 160,
+      width: size,
+      height: size,
       decoration: BoxDecoration(
         color: PigTheme.maroon.withAlpha(80),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: PigTheme.goldenrod, width: 2),
+        borderRadius: BorderRadius.circular(size * 0.08),
+        border: Border.all(color: PigTheme.goldenrod, width: 2.5),
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(14),
@@ -378,10 +475,10 @@ class _AlbumArt extends StatelessWidget {
   }
 }
 
-/// Upcoming songs — shows next 3 with X to remove.
 class _UpcomingList extends StatelessWidget {
   final AudioService audio;
-  const _UpcomingList({required this.audio});
+  final bool isVertical;
+  const _UpcomingList({required this.audio, this.isVertical = false});
 
   @override
   Widget build(BuildContext context) {
@@ -391,59 +488,72 @@ class _UpcomingList extends StatelessWidget {
 
     // Get next 3 songs after current
     final upcoming = <int>[];
-    for (
-      int i = audio.currentIndex + 1;
-      i < audio.playlist.length && upcoming.length < 3;
-      i++
-    ) {
+    for (int i = audio.currentIndex + 1;
+        i < audio.playlist.length && upcoming.length < 3;
+        i++) {
       upcoming.add(i);
     }
 
     if (upcoming.isEmpty) return const SizedBox.shrink();
 
     return Container(
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         color: PigTheme.navy,
-        border: Border(top: BorderSide(color: PigTheme.maroon, width: 1)),
+        border: isVertical
+            ? const Border(left: BorderSide(color: PigTheme.maroon, width: 1))
+            : const Border(top: BorderSide(color: PigTheme.maroon, width: 1)),
       ),
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Column(
-        mainAxisSize: MainAxisSize.min,
+        mainAxisSize: isVertical ? MainAxisSize.max : MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
             child: Text(
               'Up Next',
-              style: TextStyle(color: Colors.grey, fontSize: 11),
+              style: TextStyle(
+                color: PigTheme.hotPink.withOpacity(0.7),
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+              ),
             ),
           ),
           ...upcoming.map((idx) {
             final song = audio.playlist[idx];
-            return SizedBox(
-              height: 36,
+            return Container(
+              height: 48,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
               child: Row(
                 children: [
-                  const SizedBox(width: 12),
                   Expanded(
-                    child: Text(
-                      '${song.displayArtist} - ${song.displayTitle}',
-                      style: const TextStyle(color: Colors.white, fontSize: 12),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          song.displayTitle,
+                          style: const TextStyle(
+                              color: Colors.white, fontSize: 13),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        Text(
+                          song.displayArtist,
+                          style:
+                              const TextStyle(color: Colors.grey, fontSize: 11),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
                     ),
                   ),
-                  // X button to remove from queue
                   IconButton(
-                    icon: const Icon(Icons.close, size: 16),
+                    icon: const Icon(Icons.close, size: 18),
                     color: Colors.grey,
-                    tooltip: 'Remove from queue',
                     onPressed: () => audio.removeFromPlaylist(idx),
                     padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(
-                      minWidth: 32,
-                      minHeight: 32,
-                    ),
+                    constraints: const BoxConstraints(),
                   ),
                 ],
               ),
@@ -512,54 +622,60 @@ class _SeekBar extends StatelessWidget {
   }
 }
 
-class _TransportRow extends StatelessWidget {
+class _TransportControls extends StatelessWidget {
   final AudioService audio;
   final VoidCallback onPlay;
-  const _TransportRow({required this.audio, required this.onPlay});
+  final bool isVertical;
+  const _TransportControls({
+    required this.audio,
+    required this.onPlay,
+    this.isVertical = false,
+  });
 
   @override
   Widget build(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
-        border: Border.all(color: PigTheme.goldenrod, width: 2),
-        borderRadius: BorderRadius.circular(30),
+        border: Border.all(color: PigTheme.goldenrod, width: 2.5),
+        borderRadius: BorderRadius.circular(isVertical ? 20 : 60),
       ),
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      padding: const EdgeInsets.all(8),
       child: StreamBuilder<PlayerState>(
         stream: audio.playerStateStream,
         builder: (context, snapshot) {
           final playing = snapshot.data?.playing ?? false;
-          return Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              _btn(
-                Icons.skip_previous_rounded,
-                26,
-                Colors.white,
-                () => audio.prev(),
-              ),
-              _btn(
-                playing
-                    ? Icons.pause_circle_filled_rounded
-                    : Icons.play_circle_filled_rounded,
-                46,
-                PigTheme.hotPink,
-                onPlay,
-              ),
-              _btn(
-                Icons.stop_circle_rounded,
-                30,
-                Colors.white,
-                () => audio.stop(),
-              ),
-              _btn(
-                Icons.skip_next_rounded,
-                26,
-                Colors.white,
-                () => audio.next(),
-              ),
-            ],
-          );
+          final buttons = [
+            _btn(
+              Icons.skip_previous_rounded,
+              52, // Same as portrait
+              Colors.white,
+              () => audio.prev(),
+            ),
+            _btn(
+              playing
+                  ? Icons.pause_circle_filled_rounded
+                  : Icons.play_circle_filled_rounded,
+              92, // Same as portrait
+              PigTheme.hotPink,
+              onPlay,
+            ),
+            _btn(
+              Icons.stop_circle_rounded,
+              60, // Same as portrait
+              Colors.white,
+              () => audio.stop(),
+            ),
+            _btn(
+              Icons.skip_next_rounded,
+              52, // Same as portrait
+              Colors.white,
+              () => audio.next(),
+            ),
+          ];
+
+          return isVertical
+              ? Column(mainAxisSize: MainAxisSize.min, children: buttons)
+              : Row(mainAxisSize: MainAxisSize.min, children: buttons);
         },
       ),
     );
@@ -580,43 +696,49 @@ class _ControlsRow extends StatelessWidget {
   final AudioService audio;
   final bool keepScreenOn;
   final VoidCallback onToggleKeepScreenOn;
+  final bool isVertical;
   const _ControlsRow({
     required this.audio,
     required this.keepScreenOn,
     required this.onToggleKeepScreenOn,
+    this.isVertical = false,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        _tog(
-          Icons.shuffle_rounded,
-          audio.shuffle,
-          PigTheme.hotPink,
-          () => audio.toggleShuffle(),
-        ),
-        const SizedBox(width: 20),
-        _tog(
-          audio.repeatMode == PigRepeatMode.one
-              ? Icons.repeat_one_rounded
-              : Icons.repeat_rounded,
-          audio.repeatMode != PigRepeatMode.off,
-          audio.repeatMode == PigRepeatMode.one
-              ? PigTheme.goldenrod
-              : PigTheme.hotPink,
-          () => audio.toggleRepeat(),
-        ),
-        const SizedBox(width: 20),
-        _tog(
-          Icons.light_mode_rounded,
-          keepScreenOn,
-          PigTheme.goldenrod,
-          onToggleKeepScreenOn,
-        ),
-      ],
-    );
+    final buttons = [
+      _tog(
+        Icons.shuffle_rounded,
+        audio.shuffle,
+        PigTheme.hotPink,
+        () => audio.toggleShuffle(),
+      ),
+      if (!isVertical) const SizedBox(width: 20) else const SizedBox(height: 12),
+      _tog(
+        audio.repeatMode == PigRepeatMode.one
+            ? Icons.repeat_one_rounded
+            : Icons.repeat_rounded,
+        audio.repeatMode != PigRepeatMode.off,
+        audio.repeatMode == PigRepeatMode.one
+            ? PigTheme.goldenrod
+            : PigTheme.hotPink,
+        () => audio.toggleRepeat(),
+      ),
+      if (!isVertical) const SizedBox(width: 20) else const SizedBox(height: 12),
+      _tog(
+        Icons.light_mode_rounded,
+        keepScreenOn,
+        PigTheme.goldenrod,
+        onToggleKeepScreenOn,
+      ),
+    ];
+
+    return isVertical
+        ? Column(mainAxisSize: MainAxisSize.min, children: buttons)
+        : Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: buttons,
+          );
   }
 
   Widget _tog(

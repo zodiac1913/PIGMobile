@@ -7,6 +7,7 @@ import 'package:audio_service/audio_service.dart' as as_pkg;
 import 'package:audio_metadata_reader/audio_metadata_reader.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
+import 'package:rxdart/rxdart.dart';
 import '../models/song.dart';
 import 'database_service.dart';
 import 'pig_web_service.dart';
@@ -58,10 +59,24 @@ class PigAudioHandler extends as_pkg.BaseAudioHandler with as_pkg.SeekHandler {
       _broadcastState();
       onStateChanged?.call();
     });
+
+    // Listen for duration changes and broadcast media item to update Android Auto etc.
+    _player.durationStream.listen((duration) {
+      if (duration != null) {
+        _broadcastMediaItem();
+      }
+    });
   }
 
   /// Broadcast playback state to the system.
   void _broadcastState() {
+    // Determine the processing state. If the player is idle but we have a song,
+    // we should report it as 'buffering' or 'loading' to Android Auto.
+    var state = _mapState(_player.processingState);
+    if (state == as_pkg.AudioProcessingState.idle && _currentSong != null) {
+      state = as_pkg.AudioProcessingState.buffering;
+    }
+
     playbackState.add(
       as_pkg.PlaybackState(
         controls: [
@@ -79,9 +94,13 @@ class PigAudioHandler extends as_pkg.BaseAudioHandler with as_pkg.SeekHandler {
           as_pkg.MediaAction.seekBackward,
           as_pkg.MediaAction.skipToNext,
           as_pkg.MediaAction.skipToPrevious,
+          as_pkg.MediaAction.play,
+          as_pkg.MediaAction.pause,
+          as_pkg.MediaAction.stop,
+          as_pkg.MediaAction.playPause,
         },
         androidCompactActionIndices: const [0, 1, 3],
-        processingState: _mapState(_player.processingState),
+        processingState: state,
         playing: _player.playing,
         updatePosition: _player.position,
         bufferedPosition: _player.bufferedPosition,
@@ -109,23 +128,62 @@ class PigAudioHandler extends as_pkg.BaseAudioHandler with as_pkg.SeekHandler {
   void _broadcastMediaItem() {
     if (_currentSong == null) return;
     final song = _currentSong!;
-    mediaItem.add(
-      as_pkg.MediaItem(
-        id: song.filePath,
-        title: song.displayTitle,
-        artist: song.displayArtist,
-        album: song.displayAlbum,
-        duration: _player.duration,
-        genre: song.genre,
-        artUri: _artUri,
-        displayTitle: song.displayTitle,
-        displaySubtitle: song.displayArtist,
-        displayDescription: song.displayAlbum,
-        rating: null,
-        extras: null,
-      ),
+    final duration = _player.duration ??
+        (song.durationMs != null
+            ? Duration(milliseconds: song.durationMs!)
+            : null);
+
+    // Some Android Auto versions don't like file:// URIs for security reasons.
+    // We provide the data in multiple ways to ensure compatibility.
+    final item = as_pkg.MediaItem(
+      id: song.filePath,
+      title: song.displayTitle,
+      artist: song.displayArtist,
+      album: song.displayAlbum,
+      duration: duration,
+      genre: song.genre,
+      artUri: _artUri,
+      displayTitle: song.displayTitle,
+      displaySubtitle: song.displayArtist,
+      displayDescription: song.displayAlbum,
+      extras: {
+        'displayTitle': song.displayTitle,
+        'displaySubtitle': song.displayArtist,
+        'displayDescription': song.displayAlbum,
+        if (_artUri != null) 'artUri': _artUri.toString(),
+        // Explicitly set these for broader device support
+        'android.media.metadata.ALBUM_ART_URI': _artUri?.toString(),
+        'android.media.metadata.DISPLAY_ICON_URI': _artUri?.toString(),
+      },
     );
+
+    mediaItem.add(item);
+
+    // Sync the queue entry - this is vital for the "Big Window"
+    final currentQueue = queue.value;
+    if (_currentIndex >= 0 && _currentIndex < currentQueue.length) {
+      final updatedQueue = List<as_pkg.MediaItem>.from(currentQueue);
+      updatedQueue[_currentIndex] = item;
+      queue.add(updatedQueue);
+    }
   }
+
+  // ── Browsing Support for Android Auto ──
+
+  @override
+  Future<List<as_pkg.MediaItem>> getChildren(String parentMediaId,
+      [Map<String, dynamic>? options]) async {
+    if (parentMediaId == 'root') {
+      return queue.value;
+    }
+    return [];
+  }
+
+  @override
+  ValueStream<Map<String, dynamic>> get sessionExtras =>
+      BehaviorSubject.seeded(<String, dynamic>{
+        'com.google.android.gms.car.media.offline': true,
+      });
 
   // ── Playlist management ──
 
@@ -153,7 +211,9 @@ class PigAudioHandler extends as_pkg.BaseAudioHandler with as_pkg.SeekHandler {
               displayTitle: s.displayTitle,
               displaySubtitle: s.displayArtist,
               displayDescription: s.displayAlbum,
-              duration: null,
+              duration: s.durationMs != null
+                  ? Duration(milliseconds: s.durationMs!)
+                  : null,
               rating: null,
               extras: null,
             ),
@@ -171,14 +231,21 @@ class PigAudioHandler extends as_pkg.BaseAudioHandler with as_pkg.SeekHandler {
     _currentIndex = index;
     final song = _playlist[index];
     _currentSong = song;
-    await _setAlbumArt(null);
+
+    // Reset internal state
+    _currentAlbumArt = null;
+    _artUri = null;
     _currentPlaylists = [];
-    // Broadcast immediately so Android Auto gets title/artist right away
+
+    // 1. Immediate broadcast to prevent "No Items"
     _broadcastMediaItem();
     _broadcastState();
-    onStateChanged?.call();
 
     try {
+      // Load art and details from DB/file first (fast if cached)
+      await _loadSongExtras(song);
+      _broadcastMediaItem();
+
       if (song.filePath.startsWith('web://')) {
         final pieceId = int.tryParse(song.filePath.replaceFirst('web://', ''));
         if (pieceId != null && pigWebService != null) {
@@ -188,8 +255,9 @@ class PigAudioHandler extends as_pkg.BaseAudioHandler with as_pkg.SeekHandler {
       } else {
         await _player.setFilePath(song.filePath);
       }
+
       _player.play();
-      _loadSongExtras(song);
+      _broadcastState();
     } catch (e) {
       debugPrint('Error playing ${song.filePath}: $e');
     }
@@ -197,50 +265,55 @@ class PigAudioHandler extends as_pkg.BaseAudioHandler with as_pkg.SeekHandler {
   }
 
   Future<void> _loadSongExtras(Song song) async {
+    debugPrint('PIG: Loading extras for ${song.displayTitle}...');
     if (song.id == null || song.filePath.startsWith('web://')) {
-      // Still broadcast for web songs so Android Auto gets title/artist
       _broadcastMediaItem();
       return;
     }
     final db = DatabaseService();
+    final songIdStr = song.id.toString();
 
     _currentPlaylists = await db.getPlaylistNamesForSong(song.id!);
 
+    // 1. Try DB cache
     final cached = await db.getAlbumArt(song.id!);
     if (cached != null) {
-      await _setAlbumArt(Uint8List.fromList(cached));
+      debugPrint('PIG: Found art in DB cache');
+      await _setAlbumArt(Uint8List.fromList(cached), songIdStr);
       _broadcastMediaItem();
       onStateChanged?.call();
       return;
     }
 
-    final checked = await db.isAlbumArtChecked(song.id!);
-    if (checked) {
-      onStateChanged?.call();
-      return;
-    }
+    debugPrint('PIG: No DB cache, searching file/web...');
 
     try {
+      // 2. Try Embedded ID3 tags
       final file = File(song.filePath);
       if (await file.exists()) {
         final metadata = readMetadata(file, getImage: true);
         if (metadata.pictures.isNotEmpty) {
+          debugPrint('PIG: Found embedded art in file');
           final artBytes = metadata.pictures.first.bytes;
-          await _setAlbumArt(Uint8List.fromList(artBytes));
+          await _setAlbumArt(Uint8List.fromList(artBytes), songIdStr);
           await db.setAlbumArt(song.id!, artBytes);
           _broadcastMediaItem();
           onStateChanged?.call();
           return;
         }
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('PIG: File art extraction failed: $e');
+    }
 
-    // Step 2: Try MusicBrainz / Cover Art Archive (actual album cover)
+    // 3. Try MusicBrainz
     if (song.artist != null && song.artist!.isNotEmpty) {
       try {
+        debugPrint('PIG: Trying MusicBrainz for ${song.artist} - ${song.album}...');
         final artBytes = await _fetchCoverArtArchive(song.artist!, song.album);
         if (artBytes != null) {
-          await _setAlbumArt(Uint8List.fromList(artBytes));
+          debugPrint('PIG: Found art on MusicBrainz');
+          await _setAlbumArt(Uint8List.fromList(artBytes), songIdStr);
           await db.setAlbumArt(song.id!, artBytes);
           _broadcastMediaItem();
           onStateChanged?.call();
@@ -249,14 +322,14 @@ class PigAudioHandler extends as_pkg.BaseAudioHandler with as_pkg.SeekHandler {
       } catch (_) {}
     }
 
-    // Step 3: Fallback — try Wikipedia artist image
+    // 4. Try Wikipedia
     if (_currentSong?.artist != null && _currentSong!.artist!.isNotEmpty) {
       try {
-        final artBytes = await _fetchWikipediaArtistImage(
-          _currentSong!.artist!,
-        );
+        debugPrint('PIG: Trying Wikipedia for ${_currentSong!.artist}...');
+        final artBytes = await _fetchWikipediaArtistImage(_currentSong!.artist!);
         if (artBytes != null) {
-          await _setAlbumArt(Uint8List.fromList(artBytes));
+          debugPrint('PIG: Found art on Wikipedia');
+          await _setAlbumArt(Uint8List.fromList(artBytes), songIdStr);
           await db.setAlbumArt(song.id!, artBytes);
           _broadcastMediaItem();
           onStateChanged?.call();
@@ -265,17 +338,58 @@ class PigAudioHandler extends as_pkg.BaseAudioHandler with as_pkg.SeekHandler {
       } catch (_) {}
     }
 
+    debugPrint('PIG: No art found for ${song.displayTitle}');
     await db.setAlbumArt(song.id!, null);
     onStateChanged?.call();
   }
 
-  Future<void> _setAlbumArt(Uint8List? bytes) async {
+  Future<void> _setAlbumArt(Uint8List? bytes, String identifier) async {
     _currentAlbumArt = bytes;
-    if (bytes != null) {
-      final tempDir = await getTemporaryDirectory();
-      final artFile = File('${tempDir.path}/album_art.jpg');
-      await artFile.writeAsBytes(bytes);
-      _artUri = Uri.file(artFile.path);
+    if (bytes != null && bytes.isNotEmpty) {
+      try {
+        // We use the public Download folder for artwork because modern Android
+        // blocks system services (like Android Auto) from reading files inside
+        // an app's private /data/ or /Android/data/ folders.
+        final artDir = Directory('/storage/emulated/0/Download/PIG_Art_Cache');
+        if (!await artDir.exists()) {
+          await artDir.create(recursive: true);
+        }
+
+        final timestamp = DateTime.now().millisecondsSinceEpoch;
+        final artFile = File('${artDir.path}/art_${identifier}_$timestamp.jpg');
+
+        // Cleanup
+        try {
+          final files = artDir.listSync();
+          for (final f in files) {
+            if (f is File && f.path.contains('art_$identifier') && !f.path.contains(timestamp.toString())) {
+              await f.delete();
+            }
+          }
+        } catch (_) {}
+
+        await artFile.writeAsBytes(bytes, flush: true);
+
+        // Ensure the file is readable by the system
+        if (!Platform.isWindows) {
+          await Process.run('chmod', ['644', artFile.path]);
+        }
+
+        _artUri = Uri.file(artFile.path);
+        debugPrint('PIG: Saved art to PUBLIC location: $_artUri');
+      } catch (e) {
+        debugPrint('PIG: Failed to save art to public location, trying fallback: $e');
+
+        // Fallback to internal cache if public fails (e.g. permission not granted)
+        try {
+          final tempDir = await getTemporaryDirectory();
+          final artFile = File('${tempDir.path}/art_${identifier}.jpg');
+          await artFile.writeAsBytes(bytes);
+          _artUri = Uri.file(artFile.path);
+        } catch (_) {
+          _artUri = null;
+        }
+      }
     } else {
       _artUri = null;
     }
@@ -636,6 +750,8 @@ class AudioService extends ChangeNotifier {
           androidNotificationChannelName: 'PIG Music',
           androidNotificationOngoing: true,
           androidStopForegroundOnPause: true,
+          androidNotificationIcon: 'mipmap/ic_launcher',
+          androidShowNotificationBadge: true,
         ),
       );
       _handler = registeredHandler as PigAudioHandler;
