@@ -12,7 +12,14 @@ class ScannerService {
   ScannerService(this._db);
 
   static const _audioExtensions = {
-    '.mp3', '.m4a', '.aac', '.wav', '.ogg', '.flac', '.wma', '.opus'
+    '.mp3',
+    '.m4a',
+    '.aac',
+    '.wav',
+    '.ogg',
+    '.flac',
+    '.wma',
+    '.opus',
   };
 
   /// Scan a directory tree for audio files and .m3u playlists.
@@ -47,8 +54,7 @@ class ScannerService {
         continue;
       }
 
-      final sourceFolder =
-          _getSourceFolder(file.path, directoryPath, rootName);
+      final sourceFolder = _getSourceFolder(file.path, directoryPath, rootName);
 
       String? title;
       String? artist;
@@ -71,8 +77,7 @@ class ScannerService {
           (artist == null || artist.isEmpty)) {
         final parsed = _parseFileName(fileName);
         title = (title != null && title.isNotEmpty) ? title : parsed.title;
-        artist =
-            (artist != null && artist.isNotEmpty) ? artist : parsed.artist;
+        artist = (artist != null && artist.isNotEmpty) ? artist : parsed.artist;
       }
 
       final song = Song(
@@ -95,6 +100,14 @@ class ScannerService {
     int playlistsImported = 0;
     if (m3uFiles.isNotEmpty) {
       onProgress?.call('Loading song index for playlists...', 0, 0);
+
+      // Delete ALL existing playlists and reimport fresh
+      // This ensures song ID references are always correct
+      final existingPlaylists = await _db.getAllPlaylists();
+      for (final pl in existingPlaylists) {
+        if (pl.id != null) await _db.deletePlaylist(pl.id!);
+      }
+
       // Build lookup maps for fast matching
       final allSongs = await _db.getAllSongs();
       final pathMap = <String, Song>{};
@@ -108,11 +121,17 @@ class ScannerService {
       for (int i = 0; i < m3uFiles.length; i++) {
         final m3uFile = m3uFiles[i];
         onProgress?.call(
-            'Playlist: ${m3uFile.path.split('/').last}',
-            i + 1,
-            m3uFiles.length);
+          'Playlist: ${m3uFile.path.split('/').last}',
+          i + 1,
+          m3uFiles.length,
+        );
         try {
-          final imported = await _importM3u(m3uFile, directoryPath, pathMap, fileNameMap);
+          final imported = await _importM3u(
+            m3uFile,
+            directoryPath,
+            pathMap,
+            fileNameMap,
+          );
           if (imported) playlistsImported++;
         } catch (_) {
           // Skip broken playlist files
@@ -130,7 +149,10 @@ class ScannerService {
   }
 
   Future<void> _collectFiles(
-      Directory dir, List<File> audioFiles, List<File> m3uFiles) async {
+    Directory dir,
+    List<File> audioFiles,
+    List<File> m3uFiles,
+  ) async {
     try {
       await for (final entity in dir.list(followLinks: false)) {
         if (entity is File) {
@@ -196,12 +218,7 @@ class ScannerService {
         .last
         .replaceFirst(RegExp(r'\.(m3u8?|M3U8?)$'), '');
 
-    // Skip if already exists
-    final existingPlaylists = await _db.getAllPlaylists();
-    if (existingPlaylists.any((p) => p.title == playlistName)) return false;
-
-    final playlistId =
-        await _db.insertPlaylist(Playlist(title: playlistName));
+    final playlistId = await _db.insertPlaylist(Playlist(title: playlistName));
     if (playlistId <= 0) return false;
 
     int assigned = 0;
@@ -228,11 +245,9 @@ class ScannerService {
       }
 
       if (song != null && song.id != null) {
-        await _db.setSongFilter(SongFilter(
-          playlistId: playlistId,
-          songId: song.id!,
-          hasTitle: true,
-        ));
+        await _db.setSongFilter(
+          SongFilter(playlistId: playlistId, songId: song.id!, hasTitle: true),
+        );
         assigned++;
       }
     }

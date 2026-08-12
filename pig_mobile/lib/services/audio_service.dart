@@ -128,7 +128,8 @@ class PigAudioHandler extends as_pkg.BaseAudioHandler with as_pkg.SeekHandler {
   void _broadcastMediaItem() {
     if (_currentSong == null) return;
     final song = _currentSong!;
-    final duration = _player.duration ??
+    final duration =
+        _player.duration ??
         (song.durationMs != null
             ? Duration(milliseconds: song.durationMs!)
             : null);
@@ -171,19 +172,19 @@ class PigAudioHandler extends as_pkg.BaseAudioHandler with as_pkg.SeekHandler {
   // ── Browsing Support for Android Auto ──
 
   @override
-  Future<List<as_pkg.MediaItem>> getChildren(String parentMediaId,
-      [Map<String, dynamic>? options]) async {
+  Future<List<as_pkg.MediaItem>> getChildren(
+    String parentMediaId, [
+    Map<String, dynamic>? options,
+  ]) async {
     if (parentMediaId == 'root') {
       return queue.value;
     }
     return [];
   }
 
-  @override
-  ValueStream<Map<String, dynamic>> get sessionExtras =>
-      BehaviorSubject.seeded(<String, dynamic>{
-        'com.google.android.gms.car.media.offline': true,
-      });
+  ValueStream<Map<String, dynamic>> get sessionExtras => BehaviorSubject.seeded(
+    <String, dynamic>{'com.google.android.gms.car.media.offline': true},
+  );
 
   // ── Playlist management ──
 
@@ -309,7 +310,9 @@ class PigAudioHandler extends as_pkg.BaseAudioHandler with as_pkg.SeekHandler {
     // 3. Try MusicBrainz
     if (song.artist != null && song.artist!.isNotEmpty) {
       try {
-        debugPrint('PIG: Trying MusicBrainz for ${song.artist} - ${song.album}...');
+        debugPrint(
+          'PIG: Trying MusicBrainz for ${song.artist} - ${song.album}...',
+        );
         final artBytes = await _fetchCoverArtArchive(song.artist!, song.album);
         if (artBytes != null) {
           debugPrint('PIG: Found art on MusicBrainz');
@@ -326,7 +329,9 @@ class PigAudioHandler extends as_pkg.BaseAudioHandler with as_pkg.SeekHandler {
     if (_currentSong?.artist != null && _currentSong!.artist!.isNotEmpty) {
       try {
         debugPrint('PIG: Trying Wikipedia for ${_currentSong!.artist}...');
-        final artBytes = await _fetchWikipediaArtistImage(_currentSong!.artist!);
+        final artBytes = await _fetchWikipediaArtistImage(
+          _currentSong!.artist!,
+        );
         if (artBytes != null) {
           debugPrint('PIG: Found art on Wikipedia');
           await _setAlbumArt(Uint8List.fromList(artBytes), songIdStr);
@@ -362,7 +367,9 @@ class PigAudioHandler extends as_pkg.BaseAudioHandler with as_pkg.SeekHandler {
         try {
           final files = artDir.listSync();
           for (final f in files) {
-            if (f is File && f.path.contains('art_$identifier') && !f.path.contains(timestamp.toString())) {
+            if (f is File &&
+                f.path.contains('art_$identifier') &&
+                !f.path.contains(timestamp.toString())) {
               await f.delete();
             }
           }
@@ -378,12 +385,14 @@ class PigAudioHandler extends as_pkg.BaseAudioHandler with as_pkg.SeekHandler {
         _artUri = Uri.file(artFile.path);
         debugPrint('PIG: Saved art to PUBLIC location: $_artUri');
       } catch (e) {
-        debugPrint('PIG: Failed to save art to public location, trying fallback: $e');
+        debugPrint(
+          'PIG: Failed to save art to public location, trying fallback: $e',
+        );
 
         // Fallback to internal cache if public fails (e.g. permission not granted)
         try {
           final tempDir = await getTemporaryDirectory();
-          final artFile = File('${tempDir.path}/art_${identifier}.jpg');
+          final artFile = File('${tempDir.path}/art_$identifier.jpg');
           await artFile.writeAsBytes(bytes);
           _artUri = Uri.file(artFile.path);
         } catch (_) {
@@ -754,9 +763,11 @@ class AudioService extends ChangeNotifier {
           androidShowNotificationBadge: true,
         ),
       );
-      _handler = registeredHandler as PigAudioHandler;
+      _handler = registeredHandler;
       _handler.onStateChanged = () => notifyListeners();
-      debugPrint('PIG: media session initialized OK, handler=$registeredHandler');
+      debugPrint(
+        'PIG: media session initialized OK, handler=$registeredHandler',
+      );
     } catch (e) {
       debugPrint('PIG: AudioService.init FAILED: $e');
     }
