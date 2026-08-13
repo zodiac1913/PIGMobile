@@ -994,7 +994,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                     value: _shuffleOn,
                     activeThumbColor: PigTheme.hotPink,
-                    onChanged: (val) async { setState(() => _shuffleOn = val); await _settings.setShuffleOn(val); },
+                    onChanged: (val) async {
+                      setState(() => _shuffleOn = val);
+                      await _settings.setShuffleOn(val);
+                    },
                   ),
                   SwitchListTile(
                     dense: true,
@@ -1005,7 +1008,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                     value: _repeatOn,
                     activeThumbColor: PigTheme.hotPink,
-                    onChanged: (val) async { setState(() => _repeatOn = val); await _settings.setRepeatOn(val); },
+                    onChanged: (val) async {
+                      setState(() => _repeatOn = val);
+                      await _settings.setRepeatOn(val);
+                    },
                   ),
                   SwitchListTile(
                     dense: true,
@@ -1016,7 +1022,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                     value: _screenOn,
                     activeThumbColor: PigTheme.hotPink,
-                    onChanged: (val) async { setState(() => _screenOn = val); await _settings.setScreenOn(val); },
+                    onChanged: (val) async {
+                      setState(() => _screenOn = val);
+                      await _settings.setScreenOn(val);
+                    },
                   ),
                   SwitchListTile(
                     dense: true,
@@ -1027,7 +1036,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                     value: _playAllOnStart,
                     activeThumbColor: PigTheme.hotPink,
-                    onChanged: (val) async { setState(() => _playAllOnStart = val); await _settings.setPlayAllOnStart(val); },
+                    onChanged: (val) async {
+                      setState(() => _playAllOnStart = val);
+                      await _settings.setPlayAllOnStart(val);
+                    },
                   ),
                   SwitchListTile(
                     dense: true,
@@ -1038,8 +1050,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                     value: _playSelectOnStart,
                     activeThumbColor: PigTheme.hotPink,
-                    onChanged: (val) =>
-                        setState(() => _playSelectOnStart = val),
+                    onChanged: (val) async {
+                      setState(() => _playSelectOnStart = val);
+                      await _settings.setPlaySelectOnStart(val);
+                    },
                   ),
                 ],
               ),
