@@ -35,6 +35,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _onlyDownloadOnWifi = true;
   String _webLoginStatus = '';
 
+  // Playback preferences
+  bool _shuffleOn = true;
+  bool _repeatOn = true;
+  bool _screenOn = false;
+  bool _playAllOnStart = false;
+  bool _playSelectOnStart = false;
+
   final PigWebService _webService = PigWebService();
   final SettingsService _settings = SettingsService();
 
@@ -338,6 +345,45 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _webDisplayName = null;
       _webLoginStatus = '';
     });
+  }
+
+  /// Sync playlists from PIG Web into local database.
+  Future<void> _syncPlaylists() async {
+    if (!_webService.isAuthenticated) {
+      setState(() => _scanStatus = 'Not logged into PIG Web.');
+      return;
+    }
+
+    setState(() {
+      _scanning = true;
+      _scanStatus = 'Syncing playlists from PIG Web...';
+    });
+
+    try {
+      final db = DatabaseService();
+      final result = await _webService.syncPlaylistsToLocal(
+        db: db,
+        onProgress: (status, current, total) {
+          setState(() {
+            _scanStatus = status;
+            _scanProgress = current;
+            _scanTotal = total;
+          });
+        },
+      );
+
+      setState(() {
+        _scanStatus =
+            'Synced ${result['synced']} playlists (${result['skipped']} already existed, ${result['total']} total on server).';
+        _scanning = false;
+      });
+      await db.autoBackup();
+    } catch (e) {
+      setState(() {
+        _scanStatus = 'Sync failed: $e';
+        _scanning = false;
+      });
+    }
   }
 
   /// Show what the app can see at the current path.
@@ -665,7 +711,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                   ),
                   const SizedBox(height: 12),
-                  Row(
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
                     children: [
                       ElevatedButton.icon(
                         onPressed: _scanning ? null : _scan,
@@ -684,7 +732,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           foregroundColor: PigTheme.hotPink,
                         ),
                       ),
-                      const SizedBox(width: 8),
                       ElevatedButton.icon(
                         onPressed: _scanning ? null : _prune,
                         icon: const Icon(Icons.cleaning_services),
@@ -694,7 +741,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           foregroundColor: Colors.grey,
                         ),
                       ),
-                      const SizedBox(width: 8),
                       ElevatedButton.icon(
                         onPressed: _scanning ? null : _rescanTags,
                         icon: const Icon(Icons.tag),
@@ -832,14 +878,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           size: 18,
                         ),
                         const SizedBox(width: 8),
-                        Text(
-                          'Logged in as $_webDisplayName',
-                          style: const TextStyle(
-                            color: PigTheme.lawnGreen,
-                            fontSize: 13,
+                        Expanded(
+                          child: Text(
+                            'Logged in as $_webDisplayName',
+                            style: const TextStyle(
+                              color: PigTheme.lawnGreen,
+                              fontSize: 13,
+                            ),
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ),
-                        const Spacer(),
                         TextButton(
                           onPressed: _webLogout,
                           child: const Text(
@@ -860,6 +908,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ),
                     ),
                   ],
+                  const SizedBox(height: 16),
+                  // Sync Playlists button
+                  if (_webLoggedIn)
+                    ElevatedButton.icon(
+                      onPressed: _scanning ? null : _syncPlaylists,
+                      icon: const Icon(Icons.sync),
+                      label: const Text('Sync Playlists from PIG Web'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: PigTheme.maroon,
+                        foregroundColor: PigTheme.hotPink,
+                      ),
+                    ),
                   const SizedBox(height: 16),
                   // Download toggles
                   SwitchListTile(
@@ -897,6 +957,84 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       setState(() => _onlyDownloadOnWifi = val);
                       await _settings.setOnlyDownloadOnWifi(val);
                     },
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+
+          // Playback Preferences
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Playback Preferences',
+                    style: TextStyle(
+                      color: PigTheme.goldenrod,
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  SwitchListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text(
+                      'Shuffle on',
+                      style: TextStyle(color: Colors.white, fontSize: 14),
+                    ),
+                    value: _shuffleOn,
+                    activeThumbColor: PigTheme.hotPink,
+                    onChanged: (val) => setState(() => _shuffleOn = val),
+                  ),
+                  SwitchListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text(
+                      'Repeat on',
+                      style: TextStyle(color: Colors.white, fontSize: 14),
+                    ),
+                    value: _repeatOn,
+                    activeThumbColor: PigTheme.hotPink,
+                    onChanged: (val) => setState(() => _repeatOn = val),
+                  ),
+                  SwitchListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text(
+                      'Screen on',
+                      style: TextStyle(color: Colors.white, fontSize: 14),
+                    ),
+                    value: _screenOn,
+                    activeThumbColor: PigTheme.hotPink,
+                    onChanged: (val) => setState(() => _screenOn = val),
+                  ),
+                  SwitchListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text(
+                      'Play all on start',
+                      style: TextStyle(color: Colors.white, fontSize: 14),
+                    ),
+                    value: _playAllOnStart,
+                    activeThumbColor: PigTheme.hotPink,
+                    onChanged: (val) => setState(() => _playAllOnStart = val),
+                  ),
+                  SwitchListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text(
+                      'Play selection on start',
+                      style: TextStyle(color: Colors.white, fontSize: 14),
+                    ),
+                    value: _playSelectOnStart,
+                    activeThumbColor: PigTheme.hotPink,
+                    onChanged: (val) =>
+                        setState(() => _playSelectOnStart = val),
                   ),
                 ],
               ),

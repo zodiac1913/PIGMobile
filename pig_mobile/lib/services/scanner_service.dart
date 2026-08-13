@@ -101,13 +101,6 @@ class ScannerService {
     if (m3uFiles.isNotEmpty) {
       onProgress?.call('Loading song index for playlists...', 0, 0);
 
-      // Delete ALL existing playlists and reimport fresh
-      // This ensures song ID references are always correct
-      final existingPlaylists = await _db.getAllPlaylists();
-      for (final pl in existingPlaylists) {
-        if (pl.id != null) await _db.deletePlaylist(pl.id!);
-      }
-
       // Build lookup maps for fast matching
       final allSongs = await _db.getAllSongs();
       final pathMap = <String, Song>{};

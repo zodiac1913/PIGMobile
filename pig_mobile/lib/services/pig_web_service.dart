@@ -287,4 +287,79 @@ class PigWebService {
     }
     return downloaded;
   }
+
+  /// Sync playlists from PIG Web into the local database.
+  /// Matches web songs to local songs by artist+title.
+  Future<Map<String, int>> syncPlaylistsToLocal({
+    required DatabaseService db,
+    void Function(String status, int current, int total)? onProgress,
+  }) async {
+    if (!isAuthenticated) throw Exception('Not authenticated');
+
+    // Get all playlists from PIG Web
+    final webPlaylists = await getPlaylists();
+    final localSongs = await db.getAllSongs();
+
+    // Build lookup map: "artist|title" → local song
+    final songLookup = <String, Song>{};
+    for (final s in localSongs) {
+      final key =
+          '${(s.artist ?? '').toLowerCase()}|${(s.title ?? '').toLowerCase()}';
+      songLookup[key] = s;
+    }
+
+    int synced = 0;
+    int skipped = 0;
+
+    for (int i = 0; i < webPlaylists.length; i++) {
+      final pl = webPlaylists[i];
+      onProgress?.call(pl.title, i + 1, webPlaylists.length);
+
+      // Check if this playlist already exists locally
+      final existingPlaylists = await db.getAllPlaylists();
+      final existing = existingPlaylists.where((p) => p.title == pl.title);
+      if (existing.isNotEmpty) {
+        skipped++;
+        continue;
+      }
+
+      // Get songs for this playlist from PIG Web
+      try {
+        final webSongs = await browseSongs(listIds: [pl.id!]);
+
+        // Create local playlist
+        final localPlId = await db.insertPlaylist(Playlist(title: pl.title));
+        if (localPlId <= 0) continue;
+
+        int assigned = 0;
+        for (final ws in webSongs) {
+          // Match by artist + title
+          final key =
+              '${(ws.artist ?? '').toLowerCase()}|${(ws.title ?? '').toLowerCase()}';
+          final localSong = songLookup[key];
+          if (localSong != null && localSong.id != null) {
+            await db.setSongFilter(
+              SongFilter(
+                playlistId: localPlId,
+                songId: localSong.id!,
+                hasTitle: true,
+              ),
+            );
+            assigned++;
+          }
+        }
+
+        // Delete empty playlists
+        if (assigned == 0) {
+          await db.deletePlaylist(localPlId);
+        } else {
+          synced++;
+        }
+      } catch (e) {
+        debugPrint('Failed to sync playlist ${pl.title}: $e');
+      }
+    }
+
+    return {'synced': synced, 'skipped': skipped, 'total': webPlaylists.length};
+  }
 }

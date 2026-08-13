@@ -88,6 +88,18 @@ class _BrowseScreenState extends State<BrowseScreen>
     _loadFilters();
   }
 
+  /// Reload filters if they appear empty (handles case where DB wasn't ready on first load)
+  void _checkAndReloadIfNeeded() {
+    if (_filtersLoaded &&
+        _playlists.isEmpty &&
+        _folders.isEmpty &&
+        _genres.isEmpty &&
+        _artists.isEmpty &&
+        !_useWeb) {
+      _loadFilters();
+    }
+  }
+
   Future<void> _initWebService() async {
     final settings = SettingsService();
     await settings.load();
@@ -200,6 +212,7 @@ class _BrowseScreenState extends State<BrowseScreen>
   @override
   Widget build(BuildContext context) {
     super.build(context);
+    _checkAndReloadIfNeeded();
 
     if (!_filtersLoaded) {
       return const Center(child: CircularProgressIndicator());
@@ -213,10 +226,10 @@ class _BrowseScreenState extends State<BrowseScreen>
           color: PigTheme.navy,
           child: Column(
             children: [
-              // Pig icon + title row
+              // Pig icon + title row with refresh
               Row(
-                mainAxisAlignment: MainAxisAlignment.center,
                 children: [
+                  const Spacer(),
                   Image.asset(
                     'assets/pigIconsnout.png',
                     width: 28,
@@ -235,6 +248,15 @@ class _BrowseScreenState extends State<BrowseScreen>
                       fontSize: 18,
                       fontWeight: FontWeight.bold,
                     ),
+                  ),
+                  const Spacer(),
+                  IconButton(
+                    icon: const Icon(Icons.refresh, size: 20),
+                    color: Colors.grey,
+                    tooltip: 'Reload filters',
+                    onPressed: _loadFilters,
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
                   ),
                 ],
               ),

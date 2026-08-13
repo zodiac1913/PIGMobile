@@ -18,6 +18,7 @@ class PlayerScreen extends StatefulWidget {
 
 class _PlayerScreenState extends State<PlayerScreen> {
   bool _keepScreenOn = false;
+  bool _isGlobalPlay = false;
   double _volume = 1.0;
 
   @override
@@ -34,8 +35,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   /// Play button logic:
   /// 1. If already playing, toggle pause/play
   /// 2. If Browse has a queue, play that
-  /// 3. If no Browse queue, play all local songs shuffled
-  /// 4. If no music at all, show message
+  /// 3. If no Browse queue, play all (global play)
   Future<void> _handlePlay() async {
     final audio = context.read<AudioService>();
 
@@ -45,7 +45,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
       return;
     }
 
-    // Already have a playlist loaded (from a previous play) — resume
+    // Already have a playlist loaded — resume
     if (audio.playlist.isNotEmpty) {
       audio.toggle();
       return;
@@ -54,15 +54,15 @@ class _PlayerScreenState extends State<PlayerScreen> {
     // Check if Browse has built a queue
     final browseState = context.read<BrowseState>();
     if (browseState.hasQueue) {
-      // Set up web service if streaming
       if (browseState.isWeb && browseState.webService != null) {
         audio.setPigWebService(browseState.webService);
       }
       audio.setPlaylist(browseState.queue, startIndex: 0);
+      setState(() => _isGlobalPlay = false);
       return;
     }
 
-    // No selections — play all local music shuffled
+    // No selections — play all local music shuffled (global play)
     final db = DatabaseService();
     final localCount = await db.getSongCount();
     if (localCount > 0) {
@@ -71,27 +71,28 @@ class _PlayerScreenState extends State<PlayerScreen> {
         if (!audio.shuffle) audio.toggleShuffle();
         if (audio.repeatMode == PigRepeatMode.off) audio.toggleRepeat();
         audio.setPlaylist(allSongs, startIndex: 0);
+        setState(() => _isGlobalPlay = true);
         return;
       }
     }
 
-    // No local music — try web if authenticated
-    final browseState2 = context.read<BrowseState>();
-    if (browseState2.webService != null &&
-        browseState2.webService!.isAuthenticated) {
+    // No local — try web
+    if (browseState.webService != null &&
+        browseState.webService!.isAuthenticated) {
       try {
-        final webSongs = await browseState2.webService!.browseSongs();
+        final webSongs = await browseState.webService!.browseSongs();
         if (webSongs.isNotEmpty && mounted) {
-          audio.setPigWebService(browseState2.webService);
+          audio.setPigWebService(browseState.webService);
           if (!audio.shuffle) audio.toggleShuffle();
           if (audio.repeatMode == PigRepeatMode.off) audio.toggleRepeat();
           audio.setPlaylist(webSongs, startIndex: 0);
+          setState(() => _isGlobalPlay = true);
           return;
         }
       } catch (_) {}
     }
 
-    // No music at all
+    // Nothing available
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
@@ -101,6 +102,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
         duration: Duration(seconds: 4),
       ),
     );
+  }
+
+  void _stopGlobalPlay() {
+    final audio = context.read<AudioService>();
+    audio.stop();
+    setState(() => _isGlobalPlay = false);
   }
 
   void _showSongInfoModal(BuildContext context, AudioService audio) {
@@ -255,6 +262,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
                             audio: audio,
                             keepScreenOn: _keepScreenOn,
                             onToggleKeepScreenOn: _toggleKeepScreenOn,
+                            isGlobalPlay: _isGlobalPlay,
+                            onStopAll: _stopGlobalPlay,
                             isVertical: false,
                           ),
                         ],
@@ -395,11 +404,13 @@ class _PlayerScreenState extends State<PlayerScreen> {
                           // Transport
                           _TransportControls(audio: audio, onPlay: _handlePlay),
                           const SizedBox(height: 10),
-                          // Shuffle / Repeat / Screen
+                          // Shuffle / Repeat / Screen / Stop All
                           _ControlsRow(
                             audio: audio,
                             keepScreenOn: _keepScreenOn,
                             onToggleKeepScreenOn: _toggleKeepScreenOn,
+                            isGlobalPlay: _isGlobalPlay,
+                            onStopAll: _stopGlobalPlay,
                           ),
                           const SizedBox(height: 10),
                           // Volume
@@ -488,9 +499,11 @@ class _UpcomingList extends StatelessWidget {
 
     // Get next 3 songs after current
     final upcoming = <int>[];
-    for (int i = audio.currentIndex + 1;
-        i < audio.playlist.length && upcoming.length < 3;
-        i++) {
+    for (
+      int i = audio.currentIndex + 1;
+      i < audio.playlist.length && upcoming.length < 3;
+      i++
+    ) {
       upcoming.add(i);
     }
 
@@ -534,14 +547,18 @@ class _UpcomingList extends StatelessWidget {
                         Text(
                           song.displayTitle,
                           style: const TextStyle(
-                              color: Colors.white, fontSize: 13),
+                            color: Colors.white,
+                            fontSize: 13,
+                          ),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
                         Text(
                           song.displayArtist,
-                          style:
-                              const TextStyle(color: Colors.grey, fontSize: 11),
+                          style: const TextStyle(
+                            color: Colors.grey,
+                            fontSize: 11,
+                          ),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
@@ -696,24 +713,32 @@ class _ControlsRow extends StatelessWidget {
   final AudioService audio;
   final bool keepScreenOn;
   final VoidCallback onToggleKeepScreenOn;
+  final bool isGlobalPlay;
+  final VoidCallback? onStopAll;
   final bool isVertical;
   const _ControlsRow({
     required this.audio,
     required this.keepScreenOn,
     required this.onToggleKeepScreenOn,
+    this.isGlobalPlay = false,
+    this.onStopAll,
     this.isVertical = false,
   });
 
   @override
   Widget build(BuildContext context) {
-    final buttons = [
+    final spacing = isVertical
+        ? const SizedBox(height: 12)
+        : const SizedBox(width: 16);
+
+    final buttons = <Widget>[
       _tog(
         Icons.shuffle_rounded,
         audio.shuffle,
         PigTheme.hotPink,
         () => audio.toggleShuffle(),
       ),
-      if (!isVertical) const SizedBox(width: 20) else const SizedBox(height: 12),
+      spacing,
       _tog(
         audio.repeatMode == PigRepeatMode.one
             ? Icons.repeat_one_rounded
@@ -724,21 +749,43 @@ class _ControlsRow extends StatelessWidget {
             : PigTheme.hotPink,
         () => audio.toggleRepeat(),
       ),
-      if (!isVertical) const SizedBox(width: 20) else const SizedBox(height: 12),
+      spacing,
       _tog(
         Icons.light_mode_rounded,
         keepScreenOn,
         PigTheme.goldenrod,
         onToggleKeepScreenOn,
       ),
+      // 4th button: Stop All (only visible during global play)
+      if (isGlobalPlay) ...[spacing, _stopAllButton()],
     ];
 
     return isVertical
         ? Column(mainAxisSize: MainAxisSize.min, children: buttons)
-        : Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: buttons,
-          );
+        : Row(mainAxisAlignment: MainAxisAlignment.center, children: buttons);
+  }
+
+  /// Stop All button — red stop square with cyan shuffle overlay.
+  Widget _stopAllButton() {
+    return Container(
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        border: Border.all(color: Colors.red, width: 2),
+        color: Colors.red.withAlpha(30),
+      ),
+      child: IconButton(
+        icon: Stack(
+          alignment: Alignment.center,
+          children: [
+            const Icon(Icons.stop_rounded, size: 20, color: Colors.red),
+            Icon(Icons.shuffle_rounded, size: 12, color: PigTheme.cyan),
+          ],
+        ),
+        onPressed: onStopAll,
+        padding: const EdgeInsets.all(8),
+        constraints: const BoxConstraints(),
+      ),
+    );
   }
 
   Widget _tog(
