@@ -24,7 +24,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
   @override
   void initState() {
     super.initState();
-    _volume = context.read<AudioService>().volume;
+    final audio = context.read<AudioService>();
+    _volume = audio.volume;
+    _keepScreenOn = audio.keepScreenOn;
   }
 
   void _toggleKeepScreenOn() {
