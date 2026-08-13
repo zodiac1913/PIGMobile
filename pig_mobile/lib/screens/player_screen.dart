@@ -30,8 +30,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
   }
 
   void _toggleKeepScreenOn() {
-    setState(() => _keepScreenOn = !_keepScreenOn);
-    context.read<AudioService>().setKeepScreenOn(_keepScreenOn);
+    final audio = context.read<AudioService>();
+    audio.setKeepScreenOn(!audio.keepScreenOn);
   }
 
   /// Play button logic:
@@ -262,7 +262,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                           const SizedBox(height: 16),
                           _ControlsRow(
                             audio: audio,
-                            keepScreenOn: _keepScreenOn,
+                            keepScreenOn: audio.keepScreenOn,
                             onToggleKeepScreenOn: _toggleKeepScreenOn,
                             isGlobalPlay: _isGlobalPlay,
                             onStopAll: _stopGlobalPlay,
@@ -409,7 +409,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                           // Shuffle / Repeat / Screen / Stop All
                           _ControlsRow(
                             audio: audio,
-                            keepScreenOn: _keepScreenOn,
+                            keepScreenOn: audio.keepScreenOn,
                             onToggleKeepScreenOn: _toggleKeepScreenOn,
                             isGlobalPlay: _isGlobalPlay,
                             onStopAll: _stopGlobalPlay,
