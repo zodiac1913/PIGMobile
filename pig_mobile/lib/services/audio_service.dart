@@ -11,6 +11,7 @@ import 'package:rxdart/rxdart.dart';
 import '../models/song.dart';
 import 'database_service.dart';
 import 'pig_web_service.dart';
+import 'settings_service.dart';
 
 /// Playback repeat modes — matches PIGv4's off/all/one.
 enum PigRepeatMode { off, all, one }
@@ -774,6 +775,9 @@ class AudioService extends ChangeNotifier {
 
     _initialized = true;
 
+    // Apply persisted playback preferences
+    await _applyPersistedSettings();
+
     if (_pendingPlaylist != null) {
       _handler.setPlaylist(
         _pendingPlaylist!,
@@ -781,6 +785,26 @@ class AudioService extends ChangeNotifier {
         autoPlay: _pendingAutoPlay,
       );
       _pendingPlaylist = null;
+    }
+    notifyListeners();
+  }
+
+  /// Read persisted settings and apply shuffle/repeat/screen-on to the handler.
+  Future<void> _applyPersistedSettings() async {
+    final settings = SettingsService();
+    await settings.load();
+
+    // Apply shuffle
+    if (settings.shuffleOn && !_handler.isShuffle) {
+      _handler.toggleShuffle();
+    }
+    // Apply repeat
+    if (settings.repeatOn && _handler.repeatMode == PigRepeatMode.off) {
+      _handler.toggleRepeat(); // off → all
+    }
+    // Apply screen on
+    if (settings.screenOn) {
+      _handler.setKeepScreenOn(true);
     }
     notifyListeners();
   }
