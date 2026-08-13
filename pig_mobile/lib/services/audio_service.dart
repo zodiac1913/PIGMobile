@@ -806,7 +806,23 @@ class AudioService extends ChangeNotifier {
     if (settings.screenOn) {
       _handler.setKeepScreenOn(true);
     }
+
+    // Auto-play on start
+    // "Play selection on start" requires browse selections which are transient
+    // So if both are on, or just play-all is on, play all songs
+    if (settings.playAllOnStart || settings.playSelectOnStart) {
+      await _autoPlayAll();
+    }
+
     notifyListeners();
+  }
+
+  Future<void> _autoPlayAll() async {
+    final db = DatabaseService();
+    final songs = await db.getAllSongs();
+    if (songs.isNotEmpty) {
+      _handler.setPlaylist(songs, startIndex: 0, autoPlay: true);
+    }
   }
 
   void setPlaylist(
