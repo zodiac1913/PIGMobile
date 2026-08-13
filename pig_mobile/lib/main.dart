@@ -1,4 +1,6 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'services/audio_service.dart';
 import 'services/browse_state.dart';
@@ -57,6 +59,7 @@ class _MainShellState extends State<MainShell> {
     _TabInfo(icon: Icons.play_circle_outline, label: 'Player'),
     _TabInfo(icon: Icons.tune, label: 'Browse'),
     _TabInfo(icon: Icons.settings, label: 'Settings'),
+    _TabInfo(icon: Icons.exit_to_app, label: 'Exit'),
   ];
 
   @override
@@ -99,7 +102,14 @@ class _MainShellState extends State<MainShell> {
       ),
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _currentTab,
-        onTap: (i) => setState(() => _currentTab = i),
+        onTap: (i) {
+          if (i == 3) {
+            // Exit — force close the app
+            SystemNavigator.pop();
+            exit(0);
+          }
+          setState(() => _currentTab = i);
+        },
         type: BottomNavigationBarType.fixed,
         selectedFontSize: 11,
         unselectedFontSize: 10,
