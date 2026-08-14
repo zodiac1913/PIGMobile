@@ -7,6 +7,7 @@ import 'package:audio_service/audio_service.dart' as as_pkg;
 import 'package:audio_metadata_reader/audio_metadata_reader.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:rxdart/rxdart.dart';
 import '../models/song.dart';
 import 'database_service.dart';
@@ -252,7 +253,12 @@ class PigAudioHandler extends as_pkg.BaseAudioHandler with as_pkg.SeekHandler {
         final pieceId = int.tryParse(song.filePath.replaceFirst('web://', ''));
         if (pieceId != null && pigWebService != null) {
           final url = pigWebService!.getStreamUrl(pieceId);
-          await _player.setUrl(url, headers: pigWebService!.authHeaders);
+          final headers = pigWebService!.authHeaders;
+          debugPrint('PIG: Streaming URL: $url');
+          debugPrint('PIG: Auth headers: $headers');
+          await _player.setUrl(url, headers: headers);
+          // Auto-download in background if enabled
+          _maybeDownloadSong(song, pieceId);
         }
       } else {
         await _player.setFilePath(song.filePath);
@@ -260,8 +266,9 @@ class PigAudioHandler extends as_pkg.BaseAudioHandler with as_pkg.SeekHandler {
 
       _player.play();
       _broadcastState();
-    } catch (e) {
-      debugPrint('Error playing ${song.filePath}: $e');
+    } catch (e, stack) {
+      debugPrint('PIG ERROR playing ${song.filePath}: $e');
+      debugPrint('PIG STACK: $stack');
     }
     onStateChanged?.call();
   }
@@ -402,6 +409,46 @@ class PigAudioHandler extends as_pkg.BaseAudioHandler with as_pkg.SeekHandler {
       }
     } else {
       _artUri = null;
+    }
+  }
+
+  /// Auto-download a web song to local storage if settings allow.
+  Future<void> _maybeDownloadSong(Song song, int pieceId) async {
+    try {
+      final settings = SettingsService();
+      await settings.load();
+
+      if (!settings.downloadWebMusic) return;
+
+      // Check WiFi if required
+      if (settings.onlyDownloadOnWifi) {
+        final connectivity = await Connectivity().checkConnectivity();
+        if (!connectivity.contains(ConnectivityResult.wifi)) {
+          debugPrint('PIG: Skipping download — not on WiFi');
+          return;
+        }
+      }
+
+      if (pigWebService == null) return;
+
+      debugPrint('PIG: Auto-downloading ${song.displayTitle}...');
+      final filePath = await pigWebService!.downloadSong(
+        pieceId,
+        musicFolder: settings.musicPath,
+        sourceFolder: song.sourceFolder,
+      );
+
+      if (filePath != null) {
+        // Import into local DB
+        final db = DatabaseService();
+        final existing = await db.getSongByPath(filePath);
+        if (existing == null) {
+          await db.insertSong(song.copyWith(id: null, filePath: filePath));
+          debugPrint('PIG: Downloaded and imported: $filePath');
+        }
+      }
+    } catch (e) {
+      debugPrint('PIG: Auto-download failed: $e');
     }
   }
 
@@ -719,7 +766,7 @@ class PigAudioHandler extends as_pkg.BaseAudioHandler with as_pkg.SeekHandler {
 
 /// ChangeNotifier wrapper for Provider — bridges PigAudioHandler with Flutter widgets.
 class AudioService extends ChangeNotifier {
-  late final PigAudioHandler _handler;
+  late PigAudioHandler _handler;
   bool _initialized = false;
   List<Song>? _pendingPlaylist;
   int _pendingStartIndex = 0;

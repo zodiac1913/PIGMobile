@@ -6,6 +6,7 @@ import '../services/database_service.dart';
 import '../services/scanner_service.dart';
 import '../services/pig_web_service.dart';
 import '../services/settings_service.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import '../theme.dart';
 import '../version.dart';
 
@@ -386,6 +387,64 @@ class _SettingsScreenState extends State<SettingsScreen> {
     } catch (e) {
       setState(() {
         _scanStatus = 'Sync failed: $e';
+        _scanning = false;
+      });
+    }
+  }
+
+  /// Download all songs from PIG Web to local storage.
+  Future<void> _downloadAllFromWeb() async {
+    if (!_webService.isAuthenticated) {
+      setState(() => _scanStatus = 'Not logged into PIG Web.');
+      return;
+    }
+
+    // Check WiFi if required
+    if (_onlyDownloadOnWifi) {
+      final connectivity = await Connectivity().checkConnectivity();
+      if (!connectivity.contains(ConnectivityResult.wifi)) {
+        setState(
+          () => _scanStatus =
+              'Download blocked — WiFi only is enabled and you are not on WiFi.',
+        );
+        return;
+      }
+    }
+
+    setState(() {
+      _scanning = true;
+      _scanStatus = 'Fetching song list from PIG Web...';
+    });
+
+    try {
+      // Get ALL songs from the server
+      final webSongs = await _webService.browseSongs(pageSize: 50000);
+
+      setState(() => _scanStatus = 'Downloading ${webSongs.length} songs...');
+
+      final db = DatabaseService();
+      final downloaded = await _webService.downloadAndImportSongs(
+        webSongs,
+        musicFolder: _musicPath,
+        db: db,
+        onProgress: (status, current, total) {
+          setState(() {
+            _scanStatus = status;
+            _scanProgress = current;
+            _scanTotal = total;
+          });
+        },
+      );
+
+      setState(() {
+        _scanStatus = 'Downloaded $downloaded of ${webSongs.length} songs.';
+        _scanning = false;
+      });
+      await db.autoBackup();
+      _loadStats();
+    } catch (e) {
+      setState(() {
+        _scanStatus = 'Download failed: $e';
         _scanning = false;
       });
     }
@@ -920,6 +979,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       onPressed: _scanning ? null : _syncPlaylists,
                       icon: const Icon(Icons.sync),
                       label: const Text('Sync Playlists from PIG Web'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: PigTheme.maroon,
+                        foregroundColor: PigTheme.hotPink,
+                      ),
+                    ),
+                  const SizedBox(height: 8),
+                  if (_webLoggedIn)
+                    ElevatedButton.icon(
+                      onPressed: _scanning ? null : _downloadAllFromWeb,
+                      icon: const Icon(Icons.download),
+                      label: const Text('Download All Music from Web'),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: PigTheme.maroon,
                         foregroundColor: PigTheme.hotPink,

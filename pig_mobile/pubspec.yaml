@@ -28,6 +28,8 @@ dependencies:
   audio_metadata_reader: ^1.6.0
   # Media session for Bluetooth/Android Auto/CarPlay/lock screen
   audio_service: ^0.18.17
+  # WiFi detection
+  connectivity_plus: ^6.1.0
 
 dev_dependencies:
   flutter_test:

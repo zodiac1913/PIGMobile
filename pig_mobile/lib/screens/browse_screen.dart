@@ -88,14 +88,18 @@ class _BrowseScreenState extends State<BrowseScreen>
     _loadFilters();
   }
 
+  bool _hasAttemptedReload = false;
+
   /// Reload filters if they appear empty (handles case where DB wasn't ready on first load)
   void _checkAndReloadIfNeeded() {
+    if (_hasAttemptedReload) return; // Only try once
     if (_filtersLoaded &&
         _playlists.isEmpty &&
         _folders.isEmpty &&
         _genres.isEmpty &&
         _artists.isEmpty &&
         !_useWeb) {
+      _hasAttemptedReload = true;
       _loadFilters();
     }
   }
