@@ -450,6 +450,91 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
+  /// Sync from PIG Web: download songs first, then sync playlists.
+  Future<void> _syncFromWeb() async {
+    debugPrint(
+      'PIG: _syncFromWeb called. authenticated=${_webService.isAuthenticated} scanning=$_scanning',
+    );
+    if (!_webService.isAuthenticated) {
+      setState(() => _scanStatus = 'Not logged into PIG Web.');
+      return;
+    }
+
+    // Check WiFi if required
+    if (_onlyDownloadOnWifi) {
+      final connectivity = await Connectivity().checkConnectivity();
+      if (!connectivity.contains(ConnectivityResult.wifi)) {
+        setState(
+          () => _scanStatus =
+              'Sync blocked — WiFi only is enabled and you are not on WiFi.',
+        );
+        return;
+      }
+    }
+
+    setState(() {
+      _scanning = true;
+      _scanStatus = 'Syncing playlists...';
+    });
+
+    final db = DatabaseService();
+
+    // Step 1: Download all songs first (playlists need local songs to match)
+    int downloaded = 0;
+    try {
+      setState(() => _scanStatus = 'Fetching song list from PIG Web...');
+      final webSongs = await _webService.getAllSongsFromWeb();
+      debugPrint('PIG: Got ${webSongs.length} songs from web');
+      setState(() => _scanStatus = 'Downloading ${webSongs.length} songs...');
+
+      downloaded = await _webService.downloadAndImportSongs(
+        webSongs,
+        musicFolder: _musicPath,
+        db: db,
+        onProgress: (status, current, total) {
+          setState(() {
+            _scanStatus = status;
+            _scanProgress = current;
+            _scanTotal = total;
+          });
+        },
+      );
+      setState(
+        () => _scanStatus =
+            'Downloaded $downloaded songs. Now syncing playlists...',
+      );
+    } catch (e) {
+      debugPrint('PIG: Download phase failed: $e');
+      setState(() => _scanStatus = 'Download error: $e. Trying playlists...');
+    }
+
+    // Step 2: Sync playlists (now songs exist locally for matching)
+    int playlistsSynced = 0;
+    try {
+      final plResult = await _webService.syncPlaylistsToLocal(
+        db: db,
+        onProgress: (status, current, total) {
+          setState(() {
+            _scanStatus = 'Playlists: $status';
+            _scanProgress = current;
+            _scanTotal = total;
+          });
+        },
+      );
+      playlistsSynced = plResult['synced'] ?? 0;
+    } catch (e) {
+      debugPrint('PIG: Playlist sync failed: $e');
+    }
+
+    setState(() {
+      _scanStatus =
+          'Done! $downloaded songs, $playlistsSynced playlists synced.';
+      _scanning = false;
+    });
+    await db.autoBackup();
+    _loadStats();
+  }
+
   /// Show what the app can see at the current path.
   Future<void> _diagnose() async {
     final hasPermission = await _requestPermissions();
@@ -976,20 +1061,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   // Sync Playlists button
                   if (_webLoggedIn)
                     ElevatedButton.icon(
-                      onPressed: _scanning ? null : _syncPlaylists,
+                      onPressed: _scanning ? null : _syncFromWeb,
                       icon: const Icon(Icons.sync),
-                      label: const Text('Sync Playlists from PIG Web'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: PigTheme.maroon,
-                        foregroundColor: PigTheme.hotPink,
-                      ),
-                    ),
-                  const SizedBox(height: 8),
-                  if (_webLoggedIn)
-                    ElevatedButton.icon(
-                      onPressed: _scanning ? null : _downloadAllFromWeb,
-                      icon: const Icon(Icons.download),
-                      label: const Text('Download All Music from Web'),
+                      label: const Text('Sync from PIG Web'),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: PigTheme.maroon,
                         foregroundColor: PigTheme.hotPink,

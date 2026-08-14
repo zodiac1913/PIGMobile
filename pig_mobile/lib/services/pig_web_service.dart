@@ -161,6 +161,39 @@ class PigWebService {
     return songs;
   }
 
+  /// Get ALL songs from PIG Web (uses Songs/Browse which doesn't require filters).
+  Future<List<Song>> getAllSongsFromWeb({int pageSize = 5000}) async {
+    final allSongs = <Song>[];
+    int page = 1;
+    while (true) {
+      final url = '$_baseUrl/Songs/Browse?page=$page&pageSize=$pageSize';
+      final resp = await http.get(Uri.parse(url), headers: _headers);
+      if (resp.statusCode != 200) break;
+      final data = jsonDecode(resp.body);
+      final songs = (data['songs'] as List)
+          .map(
+            (s) => Song(
+              id: s['pieceId'] as int?,
+              filePath: 'web://${s['pieceId']}',
+              title: s['title'] as String?,
+              artist: s['artist'] as String?,
+              album: s['album'] as String?,
+              genre: s['genre'] as String?,
+              year: s['year'] as int?,
+              durationMs: s['seconds'] != null
+                  ? (s['seconds'] as int) * 1000
+                  : null,
+              sourceFolder: s['sourceFolder'] as String?,
+            ),
+          )
+          .toList();
+      allSongs.addAll(songs);
+      if (songs.length < pageSize) break; // Last page
+      page++;
+    }
+    return allSongs;
+  }
+
   /// Get the streaming URL for a song.
   String getStreamUrl(int pieceId) {
     return '$_baseUrl/Player/Stream?id=$pieceId';
@@ -319,8 +352,10 @@ class PigWebService {
       final existingPlaylists = await db.getAllPlaylists();
       final existing = existingPlaylists.where((p) => p.title == pl.title);
       if (existing.isNotEmpty) {
-        skipped++;
-        continue;
+        // Delete existing playlist so we can recreate with fresh song matches
+        for (final ex in existing) {
+          if (ex.id != null) await db.deletePlaylist(ex.id!);
+        }
       }
 
       // Get songs for this playlist from PIG Web

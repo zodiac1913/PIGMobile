@@ -851,7 +851,11 @@ class AudioService extends ChangeNotifier {
     }
     // Apply screen on
     if (settings.screenOn) {
-      _handler.setKeepScreenOn(true);
+      try {
+        _handler.setKeepScreenOn(true);
+      } catch (e) {
+        debugPrint('PIG: Wakelock failed (will retry when activity ready): $e');
+      }
     }
 
     // Auto-play on start
