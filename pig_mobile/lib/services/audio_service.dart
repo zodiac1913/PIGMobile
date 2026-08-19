@@ -10,6 +10,7 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:rxdart/rxdart.dart';
 import '../models/song.dart';
+import 'browse_state.dart';
 import 'database_service.dart';
 import 'pig_web_service.dart';
 import 'settings_service.dart';
@@ -798,7 +799,7 @@ class AudioService extends ChangeNotifier {
     _handler.onStateChanged = () => notifyListeners();
   }
 
-  Future<void> initMediaSession() async {
+  Future<void> initMediaSession({BrowseState? browseState}) async {
     try {
       final registeredHandler = await as_pkg.AudioService.init(
         builder: () => _handler,
@@ -823,7 +824,7 @@ class AudioService extends ChangeNotifier {
     _initialized = true;
 
     // Apply persisted playback preferences
-    await _applyPersistedSettings();
+    await _applyPersistedSettings(browseState: browseState);
 
     if (_pendingPlaylist != null) {
       _handler.setPlaylist(
@@ -837,7 +838,7 @@ class AudioService extends ChangeNotifier {
   }
 
   /// Read persisted settings and apply shuffle/repeat/screen-on to the handler.
-  Future<void> _applyPersistedSettings() async {
+  Future<void> _applyPersistedSettings({BrowseState? browseState}) async {
     final settings = SettingsService();
     await settings.load();
 
@@ -858,14 +859,42 @@ class AudioService extends ChangeNotifier {
       }
     }
 
-    // Auto-play on start
-    // "Play selection on start" requires browse selections which are transient
-    // So if both are on, or just play-all is on, play all songs
-    if (settings.playAllOnStart || settings.playSelectOnStart) {
-      await _autoPlayAll();
+    // Auto-play on start logic:
+    // If either "Play selection on start" or "Play all on start" is enabled,
+    // attempt autoplay. Priority:
+    //   1. If there's a persisted queue (selection), play that.
+    //   2. If no queue but playAllOnStart is on, play all songs randomly.
+    //   3. If both toggles are on, always autoplay — queue first, all-songs fallback.
+    if (settings.playSelectOnStart || settings.playAllOnStart) {
+      await _autoPlayOnStart(
+        browseState: browseState,
+        playAllFallback: settings.playAllOnStart,
+      );
     }
 
     notifyListeners();
+  }
+
+  /// Autoplay logic for app startup.
+  /// Prioritizes persisted queue. Falls back to all songs if allowed.
+  Future<void> _autoPlayOnStart({
+    BrowseState? browseState,
+    bool playAllFallback = false,
+  }) async {
+    // Try the persisted queue first
+    if (browseState != null && browseState.hasQueue) {
+      debugPrint(
+        'PIG: Autoplay — playing persisted queue (${browseState.queue.length} songs)',
+      );
+      _handler.setPlaylist(browseState.queue, startIndex: 0, autoPlay: true);
+      return;
+    }
+
+    // No queue — fall back to all songs if "Play all on start" is enabled
+    if (playAllFallback) {
+      debugPrint('PIG: Autoplay — no queue, playing all songs');
+      await _autoPlayAll();
+    }
   }
 
   Future<void> _autoPlayAll() async {

@@ -27,7 +27,7 @@ class DatabaseService {
 
     final db = await openDatabase(
       dbPath,
-      version: 2,
+      version: 3,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
@@ -89,6 +89,19 @@ class DatabaseService {
         'ALTER TABLE songs ADD COLUMN albumArtChecked INTEGER DEFAULT 0',
       );
     }
+    if (oldVersion < 3) {
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS queue_songs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          songId INTEGER NOT NULL,
+          position INTEGER NOT NULL,
+          FOREIGN KEY (songId) REFERENCES songs(id) ON DELETE CASCADE
+        )
+      ''');
+      await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_queue_position ON queue_songs(position)',
+      );
+    }
   }
 
   Future<void> _onCreate(Database db, int version) async {
@@ -131,6 +144,17 @@ class DatabaseService {
       )
     ''');
 
+    // Persisted queue — survives app restarts, cleared only by user action.
+    // Designed for future "saved queues" feature (add a name/queueId column).
+    await db.execute('''
+      CREATE TABLE queue_songs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        songId INTEGER NOT NULL,
+        position INTEGER NOT NULL,
+        FOREIGN KEY (songId) REFERENCES songs(id) ON DELETE CASCADE
+      )
+    ''');
+
     await db.execute('CREATE INDEX idx_songs_artist ON songs(artist)');
     await db.execute('CREATE INDEX idx_songs_genre ON songs(genre)');
     await db.execute('CREATE INDEX idx_songs_folder ON songs(sourceFolder)');
@@ -138,6 +162,9 @@ class DatabaseService {
       'CREATE INDEX idx_filters_playlist ON song_filters(playlistId)',
     );
     await db.execute('CREATE INDEX idx_filters_song ON song_filters(songId)');
+    await db.execute(
+      'CREATE INDEX idx_queue_position ON queue_songs(position)',
+    );
   }
 
   // ── Songs ──
@@ -525,5 +552,63 @@ class DatabaseService {
       return true;
     }
     return false;
+  }
+
+  // ── Queue Persistence ──
+
+  /// Save the current queue (list of songs) to the database.
+  /// Replaces any previously persisted queue.
+  Future<void> saveQueue(List<Song> songs) async {
+    final db = await database;
+    await db.transaction((txn) async {
+      await txn.delete('queue_songs');
+      for (int i = 0; i < songs.length; i++) {
+        final song = songs[i];
+        if (song.id != null) {
+          await txn.insert('queue_songs', {'songId': song.id, 'position': i});
+        }
+      }
+    });
+  }
+
+  /// Load the persisted queue. Returns songs in queue order.
+  Future<List<Song>> loadQueue() async {
+    final db = await database;
+    // Ensure table exists (handles edge case of restored older DB)
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS queue_songs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        songId INTEGER NOT NULL,
+        position INTEGER NOT NULL,
+        FOREIGN KEY (songId) REFERENCES songs(id) ON DELETE CASCADE
+      )
+    ''');
+    final rows = await db.rawQuery('''
+      SELECT s.* FROM songs s
+      INNER JOIN queue_songs q ON s.id = q.songId
+      ORDER BY q.position ASC
+    ''');
+    return rows.map((r) => Song.fromMap(r)).toList();
+  }
+
+  /// Clear the persisted queue (explicit user action).
+  Future<void> clearQueue() async {
+    final db = await database;
+    await db.delete('queue_songs');
+  }
+
+  /// Check if there is a persisted queue.
+  Future<bool> hasPersistedQueue() async {
+    final db = await database;
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS queue_songs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        songId INTEGER NOT NULL,
+        position INTEGER NOT NULL,
+        FOREIGN KEY (songId) REFERENCES songs(id) ON DELETE CASCADE
+      )
+    ''');
+    final result = await db.rawQuery('SELECT COUNT(*) as cnt FROM queue_songs');
+    return (result.first['cnt'] as int) > 0;
   }
 }

@@ -14,12 +14,16 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   final audioService = AudioService();
+  final browseState = BrowseState();
+
+  // Load persisted queue before anything else so autoplay can use it.
+  await browseState.loadPersistedQueue();
 
   runApp(
     MultiProvider(
       providers: [
         ChangeNotifierProvider.value(value: audioService),
-        ChangeNotifierProvider(create: (_) => BrowseState()),
+        ChangeNotifierProvider.value(value: browseState),
       ],
       child: const PigMobileApp(),
     ),
@@ -27,7 +31,7 @@ void main() async {
 
   // Init audio_service AFTER runApp — needed on some Android versions.
   // Happens before any user interaction so Bluetooth/Auto/CarPlay still work.
-  await audioService.initMediaSession();
+  await audioService.initMediaSession(browseState: browseState);
 }
 
 class PigMobileApp extends StatelessWidget {
