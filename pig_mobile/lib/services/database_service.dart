@@ -1,4 +1,6 @@
+import 'dart:convert';
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -610,5 +612,75 @@ class DatabaseService {
     ''');
     final result = await db.rawQuery('SELECT COUNT(*) as cnt FROM queue_songs');
     return (result.first['cnt'] as int) > 0;
+  }
+
+  // ── Browse Selections Persistence ──
+
+  /// Save browse selections as JSON in app_settings.
+  /// Designed for future "saved queues" — each saved queue will be a named
+  /// set of selections that can be recalled.
+  Future<void> saveBrowseSelections({
+    required Set<int> playlistIds,
+    required Set<String> folders,
+    required Set<String> genres,
+    required Set<String> artists,
+    required Set<int> pickedSongIds,
+  }) async {
+    final db = await database;
+    // Ensure settings table exists
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS app_settings (
+        key TEXT PRIMARY KEY,
+        value TEXT
+      )
+    ''');
+
+    final data = jsonEncode({
+      'playlistIds': playlistIds.toList(),
+      'folders': folders.toList(),
+      'genres': genres.toList(),
+      'artists': artists.toList(),
+      'pickedSongIds': pickedSongIds.toList(),
+    });
+
+    await db.insert('app_settings', {
+      'key': 'browseSelections',
+      'value': data,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  /// Load persisted browse selections. Returns null if none saved.
+  Future<Map<String, dynamic>?> loadBrowseSelections() async {
+    final db = await database;
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS app_settings (
+        key TEXT PRIMARY KEY,
+        value TEXT
+      )
+    ''');
+    final rows = await db.query(
+      'app_settings',
+      where: 'key = ?',
+      whereArgs: ['browseSelections'],
+    );
+    if (rows.isEmpty) return null;
+    final value = rows.first['value'] as String?;
+    if (value == null || value.isEmpty) return null;
+    try {
+      return jsonDecode(value) as Map<String, dynamic>;
+    } catch (e) {
+      debugPrint('PIG: Failed to decode browse selections: $e');
+      return null;
+    }
+  }
+
+  /// Clear persisted browse selections.
+  Future<void> clearBrowseSelections() async {
+    final db = await database;
+    await db.delete(
+      'app_settings',
+      where: 'key = ?',
+      whereArgs: ['browseSelections'],
+    );
   }
 }

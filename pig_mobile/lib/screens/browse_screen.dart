@@ -85,7 +85,7 @@ class _BrowseScreenState extends State<BrowseScreen>
   void initState() {
     super.initState();
     _initWebService();
-    _loadFilters();
+    _loadFilters().then((_) => _restorePersistedSelections());
   }
 
   bool _hasAttemptedReload = false;
@@ -136,6 +136,26 @@ class _BrowseScreenState extends State<BrowseScreen>
     setState(() => _filtersLoaded = true);
   }
 
+  /// Restore persisted browse selections from BrowseState and re-run query.
+  Future<void> _restorePersistedSelections() async {
+    final browseState = context.read<BrowseState>();
+    if (!browseState.hasSelections) return;
+
+    // Restore local selections from persisted state
+    setState(() {
+      _localSelectedPlaylists.addAll(browseState.selectedPlaylistIds);
+      _localSelectedFolders.addAll(browseState.selectedFolders);
+      _localSelectedGenres.addAll(browseState.selectedGenres);
+      _localSelectedArtists.addAll(browseState.selectedArtists);
+      _localPickedSongIds.addAll(browseState.pickedSongIds);
+    });
+
+    // Re-run the browse query to populate the song list
+    if (_hasAnyFilter()) {
+      await _browse();
+    }
+  }
+
   Future<void> _browse() async {
     if (!_hasAnyFilter()) {
       setState(() => _songs = []);
@@ -181,11 +201,23 @@ class _BrowseScreenState extends State<BrowseScreen>
 
     // Push queue to shared state so Player can access it
     if (mounted) {
-      context.read<BrowseState>().setQueue(
+      final browseState = context.read<BrowseState>();
+      browseState.setQueue(
         _songs,
         isWeb: _useWeb,
         webService: _useWeb ? _webService : null,
       );
+
+      // Persist the selections (checkboxes) so they survive app restart
+      if (!_useWeb) {
+        browseState.setSelections(
+          playlistIds: _localSelectedPlaylists,
+          folders: _localSelectedFolders,
+          genres: _localSelectedGenres,
+          artists: _localSelectedArtists,
+          pickedSongIds: _localPickedSongIds,
+        );
+      }
     }
   }
 
