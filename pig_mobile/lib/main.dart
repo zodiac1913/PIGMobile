@@ -8,7 +8,6 @@ import 'theme.dart';
 import 'screens/browse_screen.dart';
 import 'screens/settings_screen.dart';
 import 'screens/player_screen.dart';
-import 'widgets/mini_player.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -100,8 +99,6 @@ class _MainShellState extends State<MainShell> {
               ],
             ),
           ),
-          if (_currentTab != 0)
-            MiniPlayer(onTap: () => setState(() => _currentTab = 0)),
         ],
       ),
       bottomNavigationBar: BottomNavigationBar(
