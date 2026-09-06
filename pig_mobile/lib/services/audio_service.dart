@@ -18,6 +18,10 @@ import 'settings_service.dart';
 /// Playback repeat modes — matches PIGv4's off/all/one.
 enum PigRepeatMode { off, all, one }
 
+/// Which "play random" source is currently active.
+/// none = nothing explicitly started, all = Play All Random, selection = Play Selection Random.
+enum PigPlayMode { none, all, selection }
+
 /// The audio handler that integrates with the system media session.
 /// Bluetooth, Android Auto, lock screen, notifications all talk to this.
 class PigAudioHandler extends as_pkg.BaseAudioHandler with as_pkg.SeekHandler {
@@ -797,6 +801,10 @@ class AudioService extends ChangeNotifier {
   List<Song>? _pendingPlaylist;
   int _pendingStartIndex = 0;
   bool _pendingAutoPlay = true;
+  PigPlayMode _playMode = PigPlayMode.none;
+
+  /// Which "play random" source is currently active (drives button highlight).
+  PigPlayMode get playMode => _playMode;
 
   bool get initialized => _initialized;
   List<Song> get playlist => _initialized ? _handler.playlist : [];
@@ -911,6 +919,7 @@ class AudioService extends ChangeNotifier {
       debugPrint(
         'PIG: Autoplay — playing persisted queue (${browseState.queue.length} songs)',
       );
+      _playMode = PigPlayMode.selection;
       _handler.setShuffle(true);
       _handler.forceRepeatMode(PigRepeatMode.all);
       _handler.setPlaylist(browseState.queue, startIndex: 0, autoPlay: true);
@@ -928,6 +937,7 @@ class AudioService extends ChangeNotifier {
     final db = DatabaseService();
     final songs = await db.getAllSongs();
     if (songs.isNotEmpty) {
+      _playMode = PigPlayMode.all;
       _handler.setShuffle(true);
       _handler.forceRepeatMode(PigRepeatMode.all);
       _handler.setPlaylist(songs, startIndex: 0, autoPlay: true);
@@ -1025,6 +1035,7 @@ class AudioService extends ChangeNotifier {
       _pendingAutoPlay = true;
       return;
     }
+    _playMode = PigPlayMode.all;
     _handler.setShuffle(true);
     _handler.forceRepeatMode(PigRepeatMode.all);
     _handler.setPlaylist(songs, startIndex: 0, autoPlay: true);
@@ -1047,6 +1058,7 @@ class AudioService extends ChangeNotifier {
       _pendingAutoPlay = true;
       return;
     }
+    _playMode = PigPlayMode.selection;
     _handler.setShuffle(true);
     _handler.forceRepeatMode(PigRepeatMode.all);
     _handler.setPlaylist(songs, startIndex: 0, autoPlay: true);
@@ -1055,6 +1067,7 @@ class AudioService extends ChangeNotifier {
 
   /// Clear the loaded playlist and stop playback.
   Future<void> clearPlaylist() async {
+    _playMode = PigPlayMode.none;
     if (!_initialized) {
       _pendingPlaylist = null;
       return;

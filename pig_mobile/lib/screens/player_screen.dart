@@ -254,16 +254,13 @@ class _PlayerScreenState extends State<PlayerScreen> {
                             onPlay: _handlePlay,
                             isVertical: false,
                           ),
-                          const SizedBox(height: 12),
-                          _PlaySelectionRandomButton(
-                            onPressed: _handlePlaySelectionRandom,
-                          ),
                           const SizedBox(height: 16),
                           _ControlsRow(
                             audio: audio,
                             keepScreenOn: audio.keepScreenOn,
                             onToggleKeepScreenOn: _toggleKeepScreenOn,
                             onPlayAllRandom: _handlePlayAllRandom,
+                            onPlaySelectionRandom: _handlePlaySelectionRandom,
                             isVertical: false,
                           ),
                         ],
@@ -404,17 +401,13 @@ class _PlayerScreenState extends State<PlayerScreen> {
                           // Transport
                           _TransportControls(audio: audio, onPlay: _handlePlay),
                           const SizedBox(height: 10),
-                          // Play Selection Random
-                          _PlaySelectionRandomButton(
-                            onPressed: _handlePlaySelectionRandom,
-                          ),
-                          const SizedBox(height: 10),
-                          // Shuffle / Repeat / Screen / Play All Random
+                          // Shuffle / Repeat / Screen / Play All / Play Selection
                           _ControlsRow(
                             audio: audio,
                             keepScreenOn: audio.keepScreenOn,
                             onToggleKeepScreenOn: _toggleKeepScreenOn,
                             onPlayAllRandom: _handlePlayAllRandom,
+                            onPlaySelectionRandom: _handlePlaySelectionRandom,
                           ),
                           const SizedBox(height: 10),
                           // Volume
@@ -718,20 +711,23 @@ class _ControlsRow extends StatelessWidget {
   final bool keepScreenOn;
   final VoidCallback onToggleKeepScreenOn;
   final VoidCallback onPlayAllRandom;
+  final VoidCallback onPlaySelectionRandom;
   final bool isVertical;
   const _ControlsRow({
     required this.audio,
     required this.keepScreenOn,
     required this.onToggleKeepScreenOn,
     required this.onPlayAllRandom,
+    required this.onPlaySelectionRandom,
     this.isVertical = false,
   });
 
   @override
   Widget build(BuildContext context) {
+    // Spacing reduced ~10% (16 -> 14) to fit all 5 buttons on one line.
     final spacing = isVertical
-        ? const SizedBox(height: 12)
-        : const SizedBox(width: 16);
+        ? const SizedBox(height: 11)
+        : const SizedBox(width: 14);
 
     final buttons = <Widget>[
       _tog(
@@ -761,6 +757,9 @@ class _ControlsRow extends StatelessWidget {
       // Play All Random — hollow pink triangle with white shuffle overlay
       spacing,
       _playAllRandomButton(),
+      // Play Selection Random — hollow red triangle with white "Q" overlay
+      spacing,
+      _playSelectionRandomButton(),
     ];
 
     return isVertical
@@ -768,30 +767,77 @@ class _ControlsRow extends StatelessWidget {
         : Row(mainAxisAlignment: MainAxisAlignment.center, children: buttons);
   }
 
-  /// Play All Random — hollow pink triangle with a white shuffle overlay.
-  /// Plays ALL songs in random order.
+  /// Play All Random — hot pink hollow triangle with a white shuffle overlay.
+  /// Plays ALL songs in random order. Soft white fill when active.
   Widget _playAllRandomButton() {
+    final active = audio.playMode == PigPlayMode.all;
     return Container(
       decoration: BoxDecoration(
         shape: BoxShape.circle,
         border: Border.all(color: PigTheme.hotPink, width: 2),
-        color: PigTheme.hotPink.withAlpha(30),
+        // Soft transparent white when active, else faint pink tint.
+        color: active
+            ? Colors.white.withAlpha(46)
+            : PigTheme.hotPink.withAlpha(30),
       ),
       child: IconButton(
         tooltip: 'Play all songs (random)',
         icon: Stack(
           alignment: Alignment.center,
           children: [
+            // Icon +5% (24 -> 25)
             const Icon(
               Icons.play_arrow_outlined,
-              size: 24,
+              size: 25,
               color: PigTheme.hotPink,
             ),
-            const Icon(Icons.shuffle_rounded, size: 11, color: Colors.white),
+            // Overlay +5% (11 -> 12)
+            const Icon(Icons.shuffle_rounded, size: 12, color: Colors.white),
           ],
         ),
         onPressed: onPlayAllRandom,
-        padding: const EdgeInsets.all(8),
+        // Padding -10% (8 -> 7)
+        padding: const EdgeInsets.all(7),
+        constraints: const BoxConstraints(),
+      ),
+    );
+  }
+
+  /// Play Selection Random — hot pink hollow circle, red play triangle, white "Q".
+  /// Plays the current selection queue in random order. Soft white fill when active.
+  Widget _playSelectionRandomButton() {
+    final active = audio.playMode == PigPlayMode.selection;
+    return Container(
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        // Outer circle matches the others (hot pink).
+        border: Border.all(color: PigTheme.hotPink, width: 2),
+        // Soft transparent white when active, else faint pink tint.
+        color: active
+            ? Colors.white.withAlpha(46)
+            : PigTheme.hotPink.withAlpha(30),
+      ),
+      child: IconButton(
+        tooltip: 'Play selection (random)',
+        icon: Stack(
+          alignment: Alignment.center,
+          children: const [
+            // Internal play symbol stays red. Icon +5% (24 -> 25)
+            Icon(Icons.play_arrow_outlined, size: 25, color: Colors.red),
+            // Q text +5% (13 -> 14)
+            Text(
+              'Q',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 14,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
+        onPressed: onPlaySelectionRandom,
+        // Padding -10% (8 -> 7)
+        padding: const EdgeInsets.all(7),
         constraints: const BoxConstraints(),
       ),
     );
@@ -813,51 +859,13 @@ class _ControlsRow extends StatelessWidget {
         color: active ? activeColor.withAlpha(30) : Colors.transparent,
       ),
       child: IconButton(
-        icon: Icon(icon, size: 20),
+        // Icon +5% (20 -> 21)
+        icon: Icon(icon, size: 21),
         color: active ? activeColor : Colors.grey,
         onPressed: onPressed,
-        padding: const EdgeInsets.all(8),
+        // Padding -10% (8 -> 7)
+        padding: const EdgeInsets.all(7),
         constraints: const BoxConstraints(),
-      ),
-    );
-  }
-}
-
-/// Play Selection Random button — hollow red triangle with a white "Q" overlay.
-/// Plays the current selection queue in random order.
-class _PlaySelectionRandomButton extends StatelessWidget {
-  final VoidCallback onPressed;
-  const _PlaySelectionRandomButton({required this.onPressed});
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Container(
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          border: Border.all(color: Colors.red, width: 2),
-          color: Colors.red.withAlpha(30),
-        ),
-        child: IconButton(
-          tooltip: 'Play selection (random)',
-          icon: Stack(
-            alignment: Alignment.center,
-            children: const [
-              Icon(Icons.play_arrow_outlined, size: 34, color: Colors.red),
-              Text(
-                'Q',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 13,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ],
-          ),
-          onPressed: onPressed,
-          padding: const EdgeInsets.all(10),
-          constraints: const BoxConstraints(),
-        ),
       ),
     );
   }
