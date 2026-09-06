@@ -914,16 +914,22 @@ class AudioService extends ChangeNotifier {
     BrowseState? browseState,
     bool playAllFallback = false,
   }) async {
-    // Try the persisted queue first (Play Selection on Start)
-    if (browseState != null && browseState.hasQueue) {
-      debugPrint(
-        'PIG: Autoplay — playing persisted queue (${browseState.queue.length} songs)',
-      );
-      _playMode = PigPlayMode.selection;
-      _handler.setShuffle(true);
-      _handler.forceRepeatMode(PigRepeatMode.all);
-      _handler.setPlaylist(browseState.queue, startIndex: 0, autoPlay: true);
-      return;
+    // Try the selection first (Play Selection on Start).
+    // Re-resolve fresh from the persisted selections so startup playback
+    // always matches the checkboxes rather than a possibly-stale queue.
+    if (browseState != null &&
+        (browseState.hasSelections || browseState.hasQueue)) {
+      final songs = browseState.hasSelections
+          ? await browseState.resolveSelectionSongs()
+          : browseState.queue;
+      if (songs.isNotEmpty) {
+        debugPrint('PIG: Autoplay — playing selection (${songs.length} songs)');
+        _playMode = PigPlayMode.selection;
+        _handler.setShuffle(true);
+        _handler.forceRepeatMode(PigRepeatMode.all);
+        _handler.setPlaylist(songs, startIndex: 0, autoPlay: true);
+        return;
+      }
     }
 
     // No queue — fall back to all songs if "Play all on start" is enabled

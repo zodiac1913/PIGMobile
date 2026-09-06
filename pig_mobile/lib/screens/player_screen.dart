@@ -87,10 +87,14 @@ class _PlayerScreenState extends State<PlayerScreen> {
   }
 
   /// Play Selection Random button — explicitly play the selection queue shuffled.
+  /// Re-resolves the queue fresh from the current selections so it always
+  /// matches the checkboxes (never plays a stale queue).
   Future<void> _handlePlaySelectionRandom() async {
     final audio = context.read<AudioService>();
     final browseState = context.read<BrowseState>();
-    if (!browseState.hasQueue) {
+
+    // Nothing selected at all
+    if (!browseState.hasSelections && !browseState.hasQueue) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
@@ -101,8 +105,22 @@ class _PlayerScreenState extends State<PlayerScreen> {
       );
       return;
     }
+
+    // Resolve songs fresh from the current selections (local) — authoritative.
+    final songs = await browseState.resolveSelectionSongs();
+    if (songs.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Your selection resolved to no songs.'),
+          duration: Duration(seconds: 3),
+        ),
+      );
+      return;
+    }
+
     await audio.playSelectionRandom(
-      browseState.queue,
+      songs,
       webService: browseState.isWeb ? browseState.webService : null,
     );
   }

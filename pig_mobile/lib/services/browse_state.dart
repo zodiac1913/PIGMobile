@@ -97,6 +97,35 @@ class BrowseState extends ChangeNotifier {
     _persistSelections();
   }
 
+  /// Re-resolve the queue fresh from the current selections in the database.
+  /// This is the authoritative source for "Play Selection" — it guarantees
+  /// playback matches the checkboxes and never plays a stale queue.
+  /// Only applies to LOCAL selections (web queues use the in-memory queue).
+  Future<List<Song>> resolveSelectionSongs() async {
+    if (_isWeb) return _queue; // Web: use the already-fetched queue
+    if (!hasSelections) return const [];
+    final db = DatabaseService();
+    final songs = await db.browseSongs(
+      playlistIds: _selectedPlaylistIds.isNotEmpty
+          ? _selectedPlaylistIds.toList()
+          : null,
+      folders: _selectedFolders.isNotEmpty ? _selectedFolders.toList() : null,
+      genres: _selectedGenres.isNotEmpty ? _selectedGenres.toList() : null,
+      artists: _selectedArtists.isNotEmpty ? _selectedArtists.toList() : null,
+      pickedSongIds: _pickedSongIds.isNotEmpty ? _pickedSongIds.toList() : null,
+    );
+    debugPrint(
+      'PIG: resolveSelectionSongs — playlists=$_selectedPlaylistIds '
+      'folders=$_selectedFolders genres=$_selectedGenres '
+      'artists=$_selectedArtists picked=$_pickedSongIds '
+      '=> ${songs.length} songs',
+    );
+    // Keep the in-memory + persisted queue in sync with what we just resolved
+    _queue = songs;
+    _persistQueue(songs);
+    return songs;
+  }
+
   /// Clear the queue and selections — explicit user action only.
   void clear() {
     _queue = [];
