@@ -238,6 +238,8 @@ class _BrowseScreenState extends State<BrowseScreen>
       _songs = [];
     });
     context.read<BrowseState>().clear();
+    // Stop playback and clear the loaded playlist so auto-play-all stops too.
+    context.read<AudioService>().clearPlaylist();
   }
 
   /// Get the current browse queue (used by Player to know what's selected).

@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:just_audio/just_audio.dart';
 import '../services/audio_service.dart';
-import '../services/database_service.dart';
 import '../services/browse_state.dart';
 import '../theme.dart';
 
@@ -17,8 +16,6 @@ class PlayerScreen extends StatefulWidget {
 }
 
 class _PlayerScreenState extends State<PlayerScreen> {
-  bool _keepScreenOn = false;
-  bool _isGlobalPlay = false;
   double _volume = 1.0;
 
   @override
@@ -26,7 +23,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
     super.initState();
     final audio = context.read<AudioService>();
     _volume = audio.volume;
-    _keepScreenOn = audio.keepScreenOn;
   }
 
   void _toggleKeepScreenOn() {
@@ -34,82 +30,81 @@ class _PlayerScreenState extends State<PlayerScreen> {
     audio.setKeepScreenOn(!audio.keepScreenOn);
   }
 
-  /// Play button logic:
-  /// 1. If already playing, toggle pause/play
-  /// 2. If Browse has a queue, play that
-  /// 3. If no Browse queue, play all (global play)
+  /// Center Play/Pause button — operates on whatever is currently loaded
+  /// (whichever of the two "play random" buttons was last pressed).
+  /// If nothing is loaded, it defaults to playing the selection queue (if any),
+  /// otherwise all songs random.
   Future<void> _handlePlay() async {
     final audio = context.read<AudioService>();
 
-    // Already playing — toggle pause/play
-    if (audio.currentSong != null) {
+    // Already have something loaded — just toggle pause/play
+    if (audio.currentSong != null || audio.playlist.isNotEmpty) {
       audio.toggle();
       return;
     }
 
-    // Already have a playlist loaded — resume
-    if (audio.playlist.isNotEmpty) {
-      audio.toggle();
-      return;
-    }
-
-    // Check if Browse has built a queue
+    // Nothing loaded — sensible default: selection first, then all random
     final browseState = context.read<BrowseState>();
     if (browseState.hasQueue) {
-      if (browseState.isWeb && browseState.webService != null) {
-        audio.setPigWebService(browseState.webService);
-      }
-      audio.setPlaylist(browseState.queue, startIndex: 0);
-      setState(() => _isGlobalPlay = false);
+      await audio.playSelectionRandom(
+        browseState.queue,
+        webService: browseState.isWeb ? browseState.webService : null,
+      );
       return;
     }
 
-    // No selections — play all local music shuffled (global play)
-    final db = DatabaseService();
-    final localCount = await db.getSongCount();
-    if (localCount > 0) {
-      final allSongs = await db.getAllSongs();
-      if (allSongs.isNotEmpty && mounted) {
-        if (!audio.shuffle) audio.toggleShuffle();
-        if (audio.repeatMode == PigRepeatMode.off) audio.toggleRepeat();
-        audio.setPlaylist(allSongs, startIndex: 0);
-        setState(() => _isGlobalPlay = true);
-        return;
-      }
-    }
+    await audio.playAllRandom();
 
-    // No local — try web
-    if (browseState.webService != null &&
-        browseState.webService!.isAuthenticated) {
-      try {
-        final webSongs = await browseState.webService!.browseSongs();
-        if (webSongs.isNotEmpty && mounted) {
-          audio.setPigWebService(browseState.webService);
-          if (!audio.shuffle) audio.toggleShuffle();
-          if (audio.repeatMode == PigRepeatMode.off) audio.toggleRepeat();
-          audio.setPlaylist(webSongs, startIndex: 0);
-          setState(() => _isGlobalPlay = true);
-          return;
-        }
-      } catch (_) {}
-    }
-
-    // Nothing available
+    // If still nothing (empty library), tell the user
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text(
-          'No music available. Scan your music folder in Settings, or select music from the Browse tab.',
+    if (audio.playlist.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'No music available. Scan your music folder in Settings, or select music from the Browse tab.',
+          ),
+          duration: Duration(seconds: 4),
         ),
-        duration: Duration(seconds: 4),
-      ),
-    );
+      );
+    }
   }
 
-  void _stopGlobalPlay() {
+  /// Play All Random button — explicitly play all songs shuffled.
+  Future<void> _handlePlayAllRandom() async {
     final audio = context.read<AudioService>();
-    audio.stop();
-    setState(() => _isGlobalPlay = false);
+    await audio.playAllRandom();
+    if (!mounted) return;
+    if (audio.playlist.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'No music available. Scan your music folder in Settings.',
+          ),
+          duration: Duration(seconds: 3),
+        ),
+      );
+    }
+  }
+
+  /// Play Selection Random button — explicitly play the selection queue shuffled.
+  Future<void> _handlePlaySelectionRandom() async {
+    final audio = context.read<AudioService>();
+    final browseState = context.read<BrowseState>();
+    if (!browseState.hasQueue) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'No selection queued. Choose music in the Browse tab first.',
+          ),
+          duration: Duration(seconds: 3),
+        ),
+      );
+      return;
+    }
+    await audio.playSelectionRandom(
+      browseState.queue,
+      webService: browseState.isWeb ? browseState.webService : null,
+    );
   }
 
   void _showSongInfoModal(BuildContext context, AudioService audio) {
@@ -259,13 +254,16 @@ class _PlayerScreenState extends State<PlayerScreen> {
                             onPlay: _handlePlay,
                             isVertical: false,
                           ),
+                          const SizedBox(height: 12),
+                          _PlaySelectionRandomButton(
+                            onPressed: _handlePlaySelectionRandom,
+                          ),
                           const SizedBox(height: 16),
                           _ControlsRow(
                             audio: audio,
                             keepScreenOn: audio.keepScreenOn,
                             onToggleKeepScreenOn: _toggleKeepScreenOn,
-                            isGlobalPlay: _isGlobalPlay,
-                            onStopAll: _stopGlobalPlay,
+                            onPlayAllRandom: _handlePlayAllRandom,
                             isVertical: false,
                           ),
                         ],
@@ -406,13 +404,17 @@ class _PlayerScreenState extends State<PlayerScreen> {
                           // Transport
                           _TransportControls(audio: audio, onPlay: _handlePlay),
                           const SizedBox(height: 10),
-                          // Shuffle / Repeat / Screen / Stop All
+                          // Play Selection Random
+                          _PlaySelectionRandomButton(
+                            onPressed: _handlePlaySelectionRandom,
+                          ),
+                          const SizedBox(height: 10),
+                          // Shuffle / Repeat / Screen / Play All Random
                           _ControlsRow(
                             audio: audio,
                             keepScreenOn: audio.keepScreenOn,
                             onToggleKeepScreenOn: _toggleKeepScreenOn,
-                            isGlobalPlay: _isGlobalPlay,
-                            onStopAll: _stopGlobalPlay,
+                            onPlayAllRandom: _handlePlayAllRandom,
                           ),
                           const SizedBox(height: 10),
                           // Volume
@@ -528,7 +530,7 @@ class _UpcomingList extends StatelessWidget {
             child: Text(
               'Up Next',
               style: TextStyle(
-                color: PigTheme.hotPink.withOpacity(0.7),
+                color: PigTheme.hotPink.withValues(alpha: 0.7),
                 fontSize: 12,
                 fontWeight: FontWeight.bold,
               ),
@@ -715,15 +717,13 @@ class _ControlsRow extends StatelessWidget {
   final AudioService audio;
   final bool keepScreenOn;
   final VoidCallback onToggleKeepScreenOn;
-  final bool isGlobalPlay;
-  final VoidCallback? onStopAll;
+  final VoidCallback onPlayAllRandom;
   final bool isVertical;
   const _ControlsRow({
     required this.audio,
     required this.keepScreenOn,
     required this.onToggleKeepScreenOn,
-    this.isGlobalPlay = false,
-    this.onStopAll,
+    required this.onPlayAllRandom,
     this.isVertical = false,
   });
 
@@ -758,8 +758,9 @@ class _ControlsRow extends StatelessWidget {
         PigTheme.goldenrod,
         onToggleKeepScreenOn,
       ),
-      // 4th button: Stop All (only visible during global play)
-      if (isGlobalPlay) ...[spacing, _stopAllButton()],
+      // Play All Random — hollow pink triangle with white shuffle overlay
+      spacing,
+      _playAllRandomButton(),
     ];
 
     return isVertical
@@ -767,23 +768,29 @@ class _ControlsRow extends StatelessWidget {
         : Row(mainAxisAlignment: MainAxisAlignment.center, children: buttons);
   }
 
-  /// Stop All button — red stop square with cyan shuffle overlay.
-  Widget _stopAllButton() {
+  /// Play All Random — hollow pink triangle with a white shuffle overlay.
+  /// Plays ALL songs in random order.
+  Widget _playAllRandomButton() {
     return Container(
       decoration: BoxDecoration(
         shape: BoxShape.circle,
-        border: Border.all(color: Colors.red, width: 2),
-        color: Colors.red.withAlpha(30),
+        border: Border.all(color: PigTheme.hotPink, width: 2),
+        color: PigTheme.hotPink.withAlpha(30),
       ),
       child: IconButton(
+        tooltip: 'Play all songs (random)',
         icon: Stack(
           alignment: Alignment.center,
           children: [
-            const Icon(Icons.stop_rounded, size: 20, color: Colors.red),
-            Icon(Icons.shuffle_rounded, size: 12, color: PigTheme.cyan),
+            const Icon(
+              Icons.play_arrow_outlined,
+              size: 24,
+              color: PigTheme.hotPink,
+            ),
+            const Icon(Icons.shuffle_rounded, size: 11, color: Colors.white),
           ],
         ),
-        onPressed: onStopAll,
+        onPressed: onPlayAllRandom,
         padding: const EdgeInsets.all(8),
         constraints: const BoxConstraints(),
       ),
@@ -811,6 +818,46 @@ class _ControlsRow extends StatelessWidget {
         onPressed: onPressed,
         padding: const EdgeInsets.all(8),
         constraints: const BoxConstraints(),
+      ),
+    );
+  }
+}
+
+/// Play Selection Random button — hollow red triangle with a white "Q" overlay.
+/// Plays the current selection queue in random order.
+class _PlaySelectionRandomButton extends StatelessWidget {
+  final VoidCallback onPressed;
+  const _PlaySelectionRandomButton({required this.onPressed});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Container(
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          border: Border.all(color: Colors.red, width: 2),
+          color: Colors.red.withAlpha(30),
+        ),
+        child: IconButton(
+          tooltip: 'Play selection (random)',
+          icon: Stack(
+            alignment: Alignment.center,
+            children: const [
+              Icon(Icons.play_arrow_outlined, size: 34, color: Colors.red),
+              Text(
+                'Q',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 13,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+          onPressed: onPressed,
+          padding: const EdgeInsets.all(10),
+          constraints: const BoxConstraints(),
+        ),
       ),
     );
   }

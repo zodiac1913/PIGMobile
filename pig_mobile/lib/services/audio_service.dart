@@ -745,6 +745,31 @@ class PigAudioHandler extends as_pkg.BaseAudioHandler with as_pkg.SeekHandler {
     onStateChanged?.call();
   }
 
+  /// Force shuffle on or off (used by explicit "play random" buttons).
+  void setShuffle(bool value) {
+    if (_shuffle == value) return;
+    toggleShuffle();
+  }
+
+  /// Force repeat mode (used by explicit "play random" buttons).
+  void forceRepeatMode(PigRepeatMode mode) {
+    while (_repeatMode != mode) {
+      toggleRepeat();
+    }
+  }
+
+  /// Clear the loaded playlist and stop playback entirely.
+  Future<void> clearPlaylist() async {
+    await stop();
+    _playlist = [];
+    _originalPlaylist = [];
+    _currentIndex = -1;
+    _currentSong = null;
+    queue.add([]);
+    _broadcastState();
+    onStateChanged?.call();
+  }
+
   void setKeepScreenOn(bool value) {
     _keepScreenOn = value;
     if (value) {
@@ -881,18 +906,20 @@ class AudioService extends ChangeNotifier {
     BrowseState? browseState,
     bool playAllFallback = false,
   }) async {
-    // Try the persisted queue first
+    // Try the persisted queue first (Play Selection on Start)
     if (browseState != null && browseState.hasQueue) {
       debugPrint(
         'PIG: Autoplay — playing persisted queue (${browseState.queue.length} songs)',
       );
+      _handler.setShuffle(true);
+      _handler.forceRepeatMode(PigRepeatMode.all);
       _handler.setPlaylist(browseState.queue, startIndex: 0, autoPlay: true);
       return;
     }
 
     // No queue — fall back to all songs if "Play all on start" is enabled
     if (playAllFallback) {
-      debugPrint('PIG: Autoplay — no queue, playing all songs');
+      debugPrint('PIG: Autoplay — no queue, playing all songs random');
       await _autoPlayAll();
     }
   }
@@ -901,6 +928,8 @@ class AudioService extends ChangeNotifier {
     final db = DatabaseService();
     final songs = await db.getAllSongs();
     if (songs.isNotEmpty) {
+      _handler.setShuffle(true);
+      _handler.forceRepeatMode(PigRepeatMode.all);
       _handler.setPlaylist(songs, startIndex: 0, autoPlay: true);
     }
   }
@@ -982,5 +1011,55 @@ class AudioService extends ChangeNotifier {
   void setPigWebService(PigWebService? service) {
     if (!_initialized) return;
     _handler.pigWebService = service;
+  }
+
+  /// Explicitly play ALL songs in random (shuffle) order.
+  /// Triggered by the "Play All Random" button.
+  Future<void> playAllRandom() async {
+    final db = DatabaseService();
+    final songs = await db.getAllSongs();
+    if (songs.isEmpty) return;
+    if (!_initialized) {
+      _pendingPlaylist = songs;
+      _pendingStartIndex = 0;
+      _pendingAutoPlay = true;
+      return;
+    }
+    _handler.setShuffle(true);
+    _handler.forceRepeatMode(PigRepeatMode.all);
+    _handler.setPlaylist(songs, startIndex: 0, autoPlay: true);
+    notifyListeners();
+  }
+
+  /// Explicitly play the selection queue in random (shuffle) order.
+  /// Triggered by the "Play Selection Random" button.
+  Future<void> playSelectionRandom(
+    List<Song> songs, {
+    PigWebService? webService,
+  }) async {
+    if (songs.isEmpty) return;
+    if (webService != null) {
+      setPigWebService(webService);
+    }
+    if (!_initialized) {
+      _pendingPlaylist = songs;
+      _pendingStartIndex = 0;
+      _pendingAutoPlay = true;
+      return;
+    }
+    _handler.setShuffle(true);
+    _handler.forceRepeatMode(PigRepeatMode.all);
+    _handler.setPlaylist(songs, startIndex: 0, autoPlay: true);
+    notifyListeners();
+  }
+
+  /// Clear the loaded playlist and stop playback.
+  Future<void> clearPlaylist() async {
+    if (!_initialized) {
+      _pendingPlaylist = null;
+      return;
+    }
+    await _handler.clearPlaylist();
+    notifyListeners();
   }
 }
